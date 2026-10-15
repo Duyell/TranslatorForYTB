@@ -35,6 +35,7 @@
     ccCycleDone: false,     // 「关一下再开」强制播放器重新请求字幕是否已做过
     jaSwitchRequested: false, // 是否已请求 bridge 切到日语字幕轨
     liveStatus: 'waiting',  // 直播状态:'waiting' | 'none' | 'ok'
+    liveStarted: false,     // 本视频是否已跑过 startLive(避免重复启动)
     tracksReceived: false,  // 本视频是否拿到过 captionTracks
     trackTimer: null,       // 等待/重试 captionTracks 的定时器
     renderTimer: null,      // 渲染循环定时器
@@ -188,6 +189,7 @@
     S.ccCycleDone = false;
     S.jaSwitchRequested = false;
     S.liveStatus = 'waiting';
+    S.liveStarted = false;
     S.tracksReceived = false;
     S.shownKey = '';
     S.lastCue = null;
@@ -201,7 +203,12 @@
       // 初始状态(本脚本晚于 bridge 的事件)或漏掉的切换:把 playerData 当 videoChange 用
       onVideoChange(d);
     }
-    if (d.isLive) { S.isLive = true; return; }
+    if (d.isLive) {
+      S.isLive = true;
+      // 视频切换消息被漏掉/扩展中途才开启时,直播链路可能还没启动 → 补启动
+      if (!S.liveStarted) startLive();
+      return;
+    }
     if (!Array.isArray(d.tracks) || d.tracks.length === 0) return; // 可能晚到,等下一次
     S.tracksReceived = true;
     clearTimeout(S.trackTimer);
@@ -237,10 +244,11 @@
 
   // 强制播放器自取字幕(等 bridge 拦截到响应为止)
   function forceCC() {
+    const vid = S.videoId;
     let waited = 0;
     const iv = setInterval(() => {
       waited += 250;
-      if (!S.enabled || S.cues.length) { clearInterval(iv); return; } // 已拿到字幕
+      if (!S.enabled || S.videoId !== vid || S.cues.length) { clearInterval(iv); return; } // 已拿到字幕或已切视频
       if (waited >= 15000) {
         clearInterval(iv);
         OverlayUI.setStatus('无法获取字幕(该视频可能无自动字幕)');
@@ -275,6 +283,7 @@
   // ---------- 直播字幕 ----------
 
   function startLive() {
+    S.liveStarted = true;
     OverlayUI.setStatus('等待直播字幕…');
     const vid = S.videoId;
     let waited = 0;
