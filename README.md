@@ -30,6 +30,7 @@ Chrome 扩展:在 YouTube 播放器画面上叠加 **日语语音的实时中文
 | 翻译引擎 | 免费 Google(默认)/ 自定义 OpenAI 兼容 API |
 | API Base URL / Key / 模型名 | 自定义引擎三件套。例:DeepSeek `https://api.deepseek.com` + `deepseek-chat`;火山方舟 `https://ark.cn-beijing.volces.com/api/v3` + 你的接入点 ID。Key 只保存在本机,不同步云端 |
 | 显示日语原文 | 双语开关(默认开) |
+| 目标语言 | 译文输出语言,默认 `zh-CN`,可填任意语言代码(如 `zh-TW`、`en`、`ko`) |
 | 字号 | 12–32 px,保存即生效 |
 | 测试翻译 | 用当前设置实测翻译「こんにちは、世界」 |
 | 语音识别 API Key | 无字幕兜底用。需在[豆包语音控制台](https://console.volcengine.com/speech/app)开通「流式语音识别-大模型」并签发 Key(**火山方舟的 Key 不通用**),按转写时长计费 |

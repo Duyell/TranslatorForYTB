@@ -19,6 +19,7 @@ const DEFAULT_SETTINGS = {
   asrApiKey: '',    // 语音识别:新版豆包语音控制台签发的 API Key(火山方舟的 Key 不通用)
   asrLanguage: 'ja-JP', // 识别语言;留空 = 自动检测
   translateChat: true,  // 直播聊天评论翻译
+  targetLang: 'zh-CN',  // 译文目标语言(zh-CN/zh-TW/en/ko 等)
 };
 
 let settings = null; // 设置缓存(SW 常被回收,首次使用时从 storage 读)
@@ -111,7 +112,7 @@ async function translateText(text, priority) {
     }
     return customTranslate(s, text);
   }
-  return googleTranslate(text, priority === 'low');
+  return googleTranslate(text, priority === 'low', s.targetLang || 'zh-CN');
 }
 
 function sleep(ms) {
@@ -120,7 +121,7 @@ function sleep(ms) {
 
 // 字幕走 googleBusy(高优先级),聊天走 chatBusy(低优先级);
 // 两条链共享 lastGoogleCall 节流时间戳,保证总速率受控且字幕优先
-function googleTranslate(text, lowPriority) {
+function googleTranslate(text, lowPriority, targetLang) {
   const run = (lowPriority ? chatBusy : googleBusy).then(async () => {
     const chunks = chunkBySentence(text, GOOGLE_CHUNK_LEN);
     const parts = [];
@@ -128,7 +129,7 @@ function googleTranslate(text, lowPriority) {
       const wait = lastGoogleCall + GOOGLE_MIN_INTERVAL - Date.now();
       if (wait > 0) await sleep(wait);
       lastGoogleCall = Date.now();
-      parts.push(await googleRequest(chunk));
+      parts.push(await googleRequest(chunk, targetLang));
     }
     return parts.join('');
   });
@@ -159,12 +160,12 @@ function chunkBySentence(text, maxLen) {
   return chunks;
 }
 
-async function googleRequest(chunk) {
+async function googleRequest(chunk, targetLang) {
   // 源语言按文本特征判断:英文字母占多数 → 英译中,否则日译中。
   // (sl=auto 会把含汉字的日语句子误判成中文而原样返回,不如自己判断)
   const asciiCount = (chunk.match(/[a-zA-Z]/g) || []).length;
   const sl = asciiCount > chunk.length * 0.5 ? 'en' : 'ja';
-  const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=' + sl + '&tl=zh-CN&dt=t&q=' + encodeURIComponent(chunk);
+  const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=' + sl + '&tl=' + encodeURIComponent(targetLang || 'zh-CN') + '&dt=t&q=' + encodeURIComponent(chunk);
   for (let attempt = 0; attempt <= GOOGLE_BACKOFF.length; attempt++) {
     if (attempt > 0) await sleep(GOOGLE_BACKOFF[attempt - 1]);
     let res;
@@ -201,7 +202,7 @@ async function customTranslate(s, text) {
       body: JSON.stringify({
         model: s.customModel.trim(),
         messages: [
-          { role: 'system', content: '你是字幕翻译。把日语或英语字幕翻译成简体中文。只输出译文,不要解释,不要附原文。' },
+          { role: 'system', content: '你是字幕翻译。把日语或英语字幕翻译成语言代码为 ' + (s.targetLang || 'zh-CN') + ' 的语言。只输出译文,不要解释,不要附原文。' },
           { role: 'user', content: text },
         ],
         temperature: 0.2,

@@ -59,6 +59,7 @@
     showOriginal: true,
     fontSize: 20,
     enabled: true,
+    targetLang: 'zh-CN',
   };
 
   // ---------- 设置 ----------
@@ -74,11 +75,12 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local' || !changes.settings || !S.settings) return;
     const oldEngine = S.settings.engine;
+    const oldTargetLang = S.settings.targetLang;
     S.settings = Object.assign({}, DEFAULT_SETTINGS, changes.settings.newValue || {});
     OverlayUI.setFontSize(S.settings.fontSize);
     OverlayUI.setShowOriginal(S.settings.showOriginal);
-    if (S.settings.engine !== oldEngine) {
-      // 引擎变了:清掉旧译文,当前视频的字幕重新翻译
+    if (S.settings.engine !== oldEngine || S.settings.targetLang !== oldTargetLang) {
+      // 引擎或目标语言变了:清掉旧译文,当前视频的字幕重新翻译
       S.translations.clear();
       S.failed.clear();
       for (const c of S.cues) enqueue(c.text, c.start);
