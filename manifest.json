@@ -3,10 +3,11 @@
   "name": "TranslatorForBrowser",
   "version": "2.0.0",
   "description": "在 YouTube 播放器上叠加日语语音的实时中文翻译:优先 YouTube 自动字幕,无字幕时用火山引擎实时语音识别(ASR)兜底,支持录播与直播",
-  "permissions": ["storage", "tabCapture", "offscreen"],
+  "permissions": ["storage", "tabCapture", "offscreen", "declarativeNetRequest"],
   "host_permissions": [
     "https://translate.googleapis.com/*",
-    "https://openspeech.bytedance.com/*"
+    "https://openspeech.bytedance.com/*",
+    "wss://openspeech.bytedance.com/*"
   ],
   "optional_host_permissions": ["https://*/*"],
   "background": {

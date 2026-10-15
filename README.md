@@ -31,7 +31,7 @@ Chrome 扩展:在 YouTube 播放器画面上叠加 **日语语音的实时中文
 | 显示日语原文 | 双语开关(默认开) |
 | 字号 | 12–32 px,保存即生效 |
 | 测试翻译 | 用当前设置实测翻译「こんにちは、世界」 |
-| 语音识别 API Key | 无字幕兜底用。需在[豆包语音控制台](https://console.volcengine.com/speech/app)开通「录音文件识别大模型-极速版」并签发 Key(**火山方舟的 Key 不通用**),按转写时长计费 |
+| 语音识别 API Key | 无字幕兜底用。需在[豆包语音控制台](https://console.volcengine.com/speech/app)开通「流式语音识别-大模型」并签发 Key(**火山方舟的 Key 不通用**),按转写时长计费 |
 | 识别语言 | 默认 `ja-JP`,留空 = 自动检测 |
 | 测试识别 Key | 发一段静音音频探测 Key 是否有效 |
 
@@ -39,7 +39,7 @@ Chrome 扩展:在 YouTube 播放器画面上叠加 **日语语音的实时中文
 
 1. 主世界脚本(content/bridge.js)读取播放器数据,并**克隆拦截**播放器自己发起的字幕请求响应(timedtext json3 / 直播 webvtt)——播放器请求自带有效签名,避免 2025 年后 YouTube 的 POT 校验导致直接拉字幕为空
 2. 隔离世界脚本解析字幕 cue → 经后台 service worker 翻译(Google 接口或自定义 API,SW 请求不受页面 CORS 限制)→ 叠加层按播放进度显示
-3. **无字幕时**:service worker 用 tabCapture 捕获标签页音频 → offscreen 文档重采样为 16kHz 单声道 → 每 7 秒封装成 WAV 调火山引擎极速版识别 → 译文按块滚动显示
+3. **无字幕时**:service worker 用 tabCapture 捕获标签页音频 → offscreen 文档重采样为 16kHz 单声道 → 每 7 秒开一条火山流式识别 WebSocket 会话(鉴权头由 DNR 规则注入握手)→ 译文按块滚动显示
 
 ## 已知局限
 
