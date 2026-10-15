@@ -14,6 +14,7 @@ const DEFAULT_SETTINGS = {
   enabled: true,
   asrApiKey: '',
   asrLanguage: 'ja-JP',
+  translateChat: true,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -29,6 +30,7 @@ async function init() {
   $('fontSize').value = s.fontSize;
   $('fontSizeVal').textContent = s.fontSize + ' px';
   $('enabled').checked = s.enabled;
+  $('translateChat').checked = s.translateChat;
   $('asrApiKey').value = s.asrApiKey;
   $('asrLanguage').value = s.asrLanguage;
   syncEngineUI();
@@ -48,6 +50,7 @@ function collect() {
     showOriginal: $('showOriginal').checked,
     fontSize: Number($('fontSize').value),
     enabled: $('enabled').checked,
+    translateChat: $('translateChat').checked,
     asrApiKey: $('asrApiKey').value.trim(),
     asrLanguage: $('asrLanguage').value.trim(),
   };

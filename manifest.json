@@ -24,6 +24,12 @@
       "matches": ["https://www.youtube.com/*", "https://m.youtube.com/*"],
       "js": ["content/overlay.js", "content/captions.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.youtube.com/*", "https://m.youtube.com/*"],
+      "js": ["content/chat.js"],
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
   "action": {

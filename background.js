@@ -18,6 +18,7 @@ const DEFAULT_SETTINGS = {
   enabled: true,
   asrApiKey: '',    // 语音识别:新版豆包语音控制台签发的 API Key(火山方舟的 Key 不通用)
   asrLanguage: 'ja-JP', // 识别语言;留空 = 自动检测
+  translateChat: true,  // 直播聊天评论翻译
 };
 
 let settings = null; // 设置缓存(SW 常被回收,首次使用时从 storage 读)
@@ -41,8 +42,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg) return;
   if (msg.type === 'translate' || msg.type === 'testTranslate') {
-    // 异步翻译,return true 保持消息通道
-    translateText(msg.text)
+    // 异步翻译,return true 保持消息通道;priority='low' 走聊天低优先级队列
+    translateText(msg.text, msg.priority)
       .then((text) => sendResponse({ ok: true, text }))
       .catch((err) => sendResponse({ ok: false, error: err.message || String(err) }));
     return true;
@@ -84,7 +85,8 @@ const GOOGLE_BACKOFF = [1500]; // 429/503 退避(ms):只重试一次,保证单�
 const FETCH_TIMEOUT = 12000;    // 单次请求超时(ms):防止连接挂起把翻译队列永久卡死
 
 let lastGoogleCall = 0;
-let googleBusy = Promise.resolve(); // 串行化 Google 请求
+let googleBusy = Promise.resolve(); // 高优先级链(字幕翻译)
+let chatBusy = Promise.resolve();   // 低优先级链(直播聊天翻译,不与字幕抢速)
 
 // 带超时的 fetch:代理/网络把连接挂起时,超时后走重试,而不是永远等下去
 async function fetchWithTimeout(url, init, timeoutMs) {
@@ -97,7 +99,7 @@ async function fetchWithTimeout(url, init, timeoutMs) {
   }
 }
 
-async function translateText(text) {
+async function translateText(text, priority) {
   if (typeof text !== 'string') throw new Error('翻译内容必须是文本');
   text = text.trim();
   if (!text) throw new Error('翻译内容为空');
@@ -109,15 +111,17 @@ async function translateText(text) {
     }
     return customTranslate(s, text);
   }
-  return googleTranslate(text);
+  return googleTranslate(text, priority === 'low');
 }
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function googleTranslate(text) {
-  const run = googleBusy.then(async () => {
+// 字幕走 googleBusy(高优先级),聊天走 chatBusy(低优先级);
+// 两条链共享 lastGoogleCall 节流时间戳,保证总速率受控且字幕优先
+function googleTranslate(text, lowPriority) {
+  const run = (lowPriority ? chatBusy : googleBusy).then(async () => {
     const chunks = chunkBySentence(text, GOOGLE_CHUNK_LEN);
     const parts = [];
     for (const chunk of chunks) {
@@ -128,7 +132,8 @@ function googleTranslate(text) {
     }
     return parts.join('');
   });
-  googleBusy = run.catch(() => {}); // 错误不断链,后续请求继续执行
+  if (lowPriority) chatBusy = run.catch(() => {});   // 错误不断链,后续请求继续执行
+  else googleBusy = run.catch(() => {});
   return run;
 }
 
