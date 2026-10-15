@@ -332,6 +332,18 @@ const YOUTUBE_RE = /^https?:\/\/(www|m)\.youtube\.com\//i;
 
 chrome.action.onClicked.addListener(async (tab) => {
   if (tab.url && YOUTUBE_RE.test(tab.url)) {
+    // 扩展已开启且语音识别等待授权时,本次点击用于「授权并启动 ASR」而不是开关
+    // (tabCapture 要求用户手势:getMediaStreamId 必须在这个点击上下文里调用)
+    try {
+      const state = await chrome.tabs.sendMessage(tab.id, { type: 'getState' });
+      if (state && state.enabled) {
+        const auth = await chrome.tabs.sendMessage(tab.id, { type: 'getAsrAuthState' });
+        if (auth && auth.needsAuth) {
+          await authorizeAsr(tab.id);
+          return;
+        }
+      }
+    } catch { /* 内容脚本未就绪,走普通开关 */ }
     try {
       const resp = await chrome.tabs.sendMessage(tab.id, { type: 'toggle' });
       updateBadge(tab.id, resp && resp.enabled);
@@ -343,6 +355,26 @@ chrome.action.onClicked.addListener(async (tab) => {
     chrome.runtime.openOptionsPage();
   }
 });
+
+// 用户手势上下文里授权标签页音频并启动 ASR
+async function authorizeAsr(tabId) {
+  try {
+    const s = await getSettings();
+    if (!s.asrApiKey) throw new Error('未配置语音识别 API Key(设置页 → 语音识别)');
+    await applyAsrDnrRules();
+    const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+    await createOffscreen();
+    const resp = await chrome.runtime.sendMessage({ type: 'asrInit', streamId, language: s.asrLanguage || 'ja-JP' });
+    if (!resp || !resp.ok) throw new Error((resp && resp.error) || '音频采集启动失败');
+    asrTabId = tabId;
+    await chrome.tabs.sendMessage(tabId, { type: 'asrReady' });
+    updateBadge(tabId, true);
+  } catch (err) {
+    try {
+      await chrome.tabs.sendMessage(tabId, { type: 'asrAuthFailed', error: err.message || String(err) });
+    } catch { /* 标签已关闭 */ }
+  }
+}
 
 // ---------- badge ----------
 

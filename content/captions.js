@@ -39,6 +39,7 @@
     asrActive: false,       // 语音识别(ASR)是否在运行(无字幕时的兜底)
     asrCue: null,           // ASR 最新识别结果:{text, time}
     asrError: '',           // ASR 错误文案(如未配置 Key)
+    asrAuthNeeded: false,   // tabCapture 需要用户点一次图标授权(activeTab)
     source: 'captions',     // 当前字幕来源:'captions' | 'asr'
     tracksReceived: false,  // 本视频是否拿到过 captionTracks
     trackTimer: null,       // 等待/重试 captionTracks 的定时器
@@ -99,12 +100,15 @@
     else if (d.type === 'captionBody') onCaptionBody(d);
   });
 
-  // background → 本脚本(开关/状态查询/ASR 识别结果)
+  // background → 本脚本(开关/状态查询/ASR 识别结果/授权回调)
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!msg) return;
     if (msg.type === 'toggle') { toggle(); sendResponse({ enabled: S.enabled }); }
     else if (msg.type === 'getState') { sendResponse({ enabled: S.enabled }); }
+    else if (msg.type === 'getAsrAuthState') { sendResponse({ needsAuth: S.asrAuthNeeded }); }
     else if (msg.type === 'asrResult') { onAsrResult(msg); sendResponse({}); }
+    else if (msg.type === 'asrReady') { onAsrReady(); sendResponse({}); }
+    else if (msg.type === 'asrAuthFailed') { onAsrAuthFailed(msg.error); sendResponse({}); }
   });
 
   // ---------- 开关 ----------
@@ -120,6 +124,10 @@
     startRenderLoop();
     // 页面可能已加载完,bridge 的历史事件已错过,主动索取一次播放器数据
     postCtrl({ type: 'getPlayerData' });
+    // 重新开启时若当前视频仍没有字幕来源,重新走语音识别兜底
+    if (S.videoId && S.source === 'asr' && !S.asrActive && !S.asrAuthNeeded) {
+      startAsrFallback('启动语音识别…');
+    }
   }
 
   function stop() {
@@ -205,6 +213,7 @@
     S.lastCue = null;
     S.asrCue = null;    // 换视频后旧的识别结果不显示
     S.asrError = '';
+    S.asrAuthNeeded = false; // 换视频后重新尝试自动启动(授权在同标签内仍有效)
     clearTimeout(S.trackTimer);
     OverlayUI.hide();
   }
@@ -369,7 +378,6 @@
   // 无字幕时启动标签页音频识别(background 负责采集与调用火山接口)
   async function startAsrFallback(statusText) {
     if (S.asrActive) return; // 已在运行
-    S.asrActive = true;
     S.source = 'asr';
     OverlayUI.setStatus(statusText || '启动语音识别…');
     let resp = null;
@@ -380,8 +388,30 @@
     }
     if (!resp || !resp.ok) {
       S.asrError = (resp && resp.error) || '语音识别启动失败';
+      // tabCapture 需要用户手势:提示点一次工具栏图标完成授权(授权后自动启动)
+      if (/invoked|activeTab/i.test(S.asrError)) {
+        S.asrAuthNeeded = true;
+        OverlayUI.setStatus('语音识别需授权:点击工具栏图标(或按 Alt+Shift+D)一次');
+        return;
+      }
       OverlayUI.setStatus(S.asrError);
+      return;
     }
+    S.asrActive = true;
+  }
+
+  // 用户点了图标完成授权,SW 已启动采集 → 激活 ASR 显示
+  function onAsrReady() {
+    S.asrAuthNeeded = false;
+    S.asrActive = true;
+    S.source = 'asr';
+    OverlayUI.setStatus('语音识别已启动,等待说话…');
+  }
+
+  function onAsrAuthFailed(error) {
+    S.asrAuthNeeded = false;
+    S.asrError = '语音识别启动失败: ' + (error || '未知错误');
+    OverlayUI.setStatus(S.asrError);
   }
 
   // 停掉语音识别(拿到字幕 / 开关关闭时)
@@ -409,6 +439,11 @@
   function renderAsr() {
     const cue = S.asrCue;
     if (!cue) {
+      // 授权提示优先展示,不被渲染循环覆盖
+      if (S.asrAuthNeeded) {
+        OverlayUI.setStatus('语音识别需授权:点击工具栏图标(或按 Alt+Shift+D)一次');
+        return;
+      }
       OverlayUI.setStatus(S.asrError || '语音识别中,等待说话…');
       return;
     }
