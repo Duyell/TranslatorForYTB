@@ -475,6 +475,7 @@
 
   // background 转发的识别结果:静音块忽略,有文本则显示最新一条并翻译
   function onAsrResult(d) {
+    console.log('[YTSUB] 页面收到 asrResult: text=' + JSON.stringify((d.text || '').slice(0, 30)) + ' error=' + (d.error || '').slice(0, 60));
     if (!S.enabled || !S.asrActive) return;
     if (d.error) {
       S.asrError = '语音识别失败: ' + d.error;

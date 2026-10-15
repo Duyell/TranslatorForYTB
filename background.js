@@ -304,6 +304,7 @@ async function createOffscreen() {
 // offscreen 每 7 秒发来一块识别结果 → 转发给内容脚本
 async function handleAsrChunkResult(msg) {
   const tabId = asrTabId;
+  console.log('[YTSUB] 收到 offscreen 识别块: text=' + JSON.stringify((msg.text || '').slice(0, 30)) + ' error=' + (msg.error || '').slice(0, 60) + ' asrTabId=' + tabId);
   if (tabId != null) {
     try {
       await chrome.tabs.sendMessage(tabId, { type: 'asrResult', text: msg.text || '', error: msg.error || '' });

@@ -103,9 +103,11 @@ function flushChunk() {
   if (!speech || speech.length < SAMPLE_RATE * 0.4) return; // 无有效语音(或过短)不送
 
   busy = true;
+  console.log('[YTSUB-ASR] 发送音频块:' + Math.round(speech.length / SAMPLE_RATE * 10) / 10 + ' 秒');
   runSession(new Uint8Array(speech.buffer, speech.byteOffset, speech.byteLength), language)
     .then((r) => {
       busy = false;
+      console.log('[YTSUB-ASR] 识别会话结束: text=' + JSON.stringify((r.text || '').slice(0, 30)) + ' error=' + (r.error || '').slice(0, 60));
       // 结果(或错误)交给 background 转发给内容脚本
       chrome.runtime.sendMessage({ type: 'asrChunkResult', text: r.text || '', error: r.error || '' })
         .catch(() => { /* SW 未就绪,丢这一块 */ });
