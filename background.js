@@ -270,7 +270,6 @@ async function startAsr(tabId) {
   const resp = await chrome.runtime.sendMessage({ type: 'asrInit', streamId, language: s.asrLanguage || 'ja-JP' });
   if (!resp || !resp.ok) throw new Error((resp && resp.error) || '音频采集启动失败');
   asrTabId = tabId;
-  console.log('[YTSUB-ASR] 已启动,目标标签', tabId);
 }
 
 async function stopAsr() {
@@ -300,7 +299,6 @@ async function createOffscreen() {
 // offscreen 每 7 秒发来一块识别结果 → 转发给内容脚本
 async function handleAsrChunkResult(msg) {
   const tabId = asrTabId;
-  if (msg.error) console.log('[YTSUB-ASR] 识别失败:', msg.error);
   if (tabId != null) {
     try {
       await chrome.tabs.sendMessage(tabId, { type: 'asrResult', text: msg.text || '', error: msg.error || '' });
@@ -338,17 +336,13 @@ const YOUTUBE_RE = /^https?:\/\/(www|m)\.youtube\.com\//i;
 
 chrome.action.onClicked.addListener(async (tab) => {
   if (tab.url && YOUTUBE_RE.test(tab.url)) {
-    console.log('[YTSUB] 图标点击,标签', tab.id);
     // 先在手势上下文里立刻申请标签页音频流(tabCapture 对时序敏感,
     // 任何 await 都可能错失授权窗口):需要授权时直接用它启动 ASR,
     // 不需要时丢弃(未消费的流会自动过期,无副作用)
     let preStreamId = null;
     try {
       preStreamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
-      console.log('[YTSUB] 点击即申请流:成功');
-    } catch (err) {
-      console.log('[YTSUB] 点击即申请流:失败 —', err.message || String(err));
-    }
+    } catch { /* 未授权:授权路径里会再试 */ }
     let state = null;
     try { state = await chrome.tabs.sendMessage(tab.id, { type: 'getState' }); } catch { /* 未就绪 */ }
     if (state && state.enabled) {
@@ -385,7 +379,6 @@ async function authorizeAsr(tabId, preStreamId) {
         streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
       } catch (err) {
         // 授权状态可能晚于点击处理器生效:稍等重试一次
-        console.log('[YTSUB-ASR] 授权第一次申请失败,600ms 后重试:', err.message || String(err));
         await sleep(600);
         streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
       }
@@ -396,9 +389,7 @@ async function authorizeAsr(tabId, preStreamId) {
     asrTabId = tabId;
     await chrome.tabs.sendMessage(tabId, { type: 'asrReady' });
     updateBadge(tabId, true);
-    console.log('[YTSUB-ASR] 授权成功,采集已启动');
   } catch (err) {
-    console.log('[YTSUB-ASR] 授权启动失败:', err.message || String(err));
     try {
       await chrome.tabs.sendMessage(tabId, { type: 'asrAuthFailed', error: err.message || String(err) });
     } catch { /* 标签已关闭 */ }

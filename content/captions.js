@@ -107,10 +107,7 @@
     if (!msg) return;
     if (msg.type === 'toggle') { toggle(); sendResponse({ enabled: S.enabled }); }
     else if (msg.type === 'getState') { sendResponse({ enabled: S.enabled }); }
-    else if (msg.type === 'getAsrAuthState') {
-      console.log('[YTSUB] 图标点击查询授权状态: needsAuth=' + S.asrAuthNeeded + ' active=' + S.asrActive);
-      sendResponse({ needsAuth: S.asrAuthNeeded });
-    }
+    else if (msg.type === 'getAsrAuthState') { sendResponse({ needsAuth: S.asrAuthNeeded }); }
     else if (msg.type === 'asrResult') { onAsrResult(msg); sendResponse({}); }
     else if (msg.type === 'asrReady') { onAsrReady(); sendResponse({}); }
     else if (msg.type === 'asrAuthFailed') { onAsrAuthFailed(msg.error); sendResponse({}); }
@@ -196,7 +193,6 @@
 
   function onVideoChange(d) {
     if (d.videoId === S.videoId) return;
-    console.log('[YTSUB] 视频切换 →', d.videoId, d.isLive ? '直播' : '录播', '开关=' + (S.enabled ? '开' : '关'));
     S.videoId = d.videoId;
     S.isLive = !!d.isLive;
     resetVideoState();
@@ -286,18 +282,13 @@
       clearTimeout(timer);
       if (res.ok) {
         const body = await res.text();
-        console.log('[YTSUB] 直接拉字幕:HTTP', res.status, body.length + ' 字节');
         if (body.trim()) {
           const cues = parseJson3(JSON.parse(body));
           if (cues.length) { applyVodCues(cues); return; }
         }
-        console.log('[YTSUB] 直接拉字幕拿到的 body 为空(POT 校验)→ 改走 CC 拦截');
-      } else {
-        console.log('[YTSUB] 直接拉字幕失败 HTTP', res.status, '→ 改走 CC 拦截');
+        // body 为空(POT 校验)→ 落到底部走 CC 拦截
       }
-    } catch (err) {
-      console.log('[YTSUB] 直接拉字幕异常', String(err), '→ 改走 CC 拦截');
-    }
+    } catch { /* 走强制 CC 拦截路径 */ }
     forceCC();
   }
 
@@ -319,7 +310,6 @@
       if (btn.getAttribute('aria-pressed') !== 'true') {
         btn.click(); // 打开 CC,播放器会发起带签名的字幕请求
         S.ccToggledByUs = true;
-        console.log('[YTSUB] 已自动打开 CC,等待播放器请求字幕');
       } else if (!S.ccCycleDone) {
         // CC 本就开着但没拦到请求(如扩展晚于播放器加载)→ 快速关再开触发重取
         S.ccCycleDone = true;
@@ -341,10 +331,7 @@
       enqueue(c.text, c.start);
       added = true;
     }
-    if (added) {
-      S.cues.sort((a, b) => a.start - b.start);
-      console.log('[YTSUB] 录播字幕就绪:共 ' + S.cues.length + ' 条(新增 ' + (S.cues.length - before) + ')');
-    }
+    if (added) S.cues.sort((a, b) => a.start - b.start);
   }
 
   // ---------- 直播字幕 ----------
@@ -421,7 +408,6 @@
     } catch (err) {
       resp = { ok: false, error: String(err) };
     }
-    console.log('[YTSUB] asrStart 结果:', resp ? (resp.ok ? '成功' : '失败: ' + resp.error) : '无响应');
     if (!resp || !resp.ok) {
       S.asrError = (resp && resp.error) || '语音识别启动失败';
       // tabCapture 需要用户手势:提示点一次工具栏图标完成授权(授权后自动启动)
@@ -458,7 +444,6 @@
 
   // 用户点了图标完成授权,SW 已启动采集 → 激活 ASR 显示
   function onAsrReady() {
-    console.log('[YTSUB] 收到 asrReady,ASR 激活');
     S.asrAuthNeeded = false;
     S.asrAuthAttempts = 0;
     S.asrActive = true;
@@ -467,7 +452,6 @@
   }
 
   function onAsrAuthFailed(error) {
-    console.log('[YTSUB] 收到 asrAuthFailed:', error);
     S.asrError = '语音识别启动失败: ' + (error || '未知错误');
     if (/invoked|activeTab/i.test(S.asrError)) {
       // 点击授权的尝试也撞上授权状态晚到:保持等待并自动重试
@@ -643,16 +627,12 @@
         req,
         new Promise((resolve) => setTimeout(() => resolve({ ok: false, error: '后台无响应(超时)' }), TRANSLATE_TIMEOUT)),
       ]);
-    } catch (err) {
-      console.log('[YTSUB] 翻译请求异常', String(err));
-    }
+    } catch { /* SW 未就绪等,按失败重试 */ }
     S.inflight--;
     if (result && result.ok) {
       S.translations.set(item.text, result.text);
-      console.log('[YTSUB] 翻译完成:', JSON.stringify(item.text.slice(0, 40)), '→', JSON.stringify(result.text.slice(0, 40)));
     } else if (item.attempts < 2) {
       // 网络抖动:缓 3 秒再重试,避免队列空转、请求雪崩
-      console.log('[YTSUB] 翻译失败(第 ' + (item.attempts + 1) + ' 次,3 秒后重试):', (result && result.error) || '无响应');
       S.retryPending.add(item.text);
       setTimeout(() => {
         S.retryPending.delete(item.text);
@@ -661,7 +641,6 @@
         processQueue();
       }, 3000);
     } else {
-      console.log('[YTSUB] 翻译最终失败,降级显示原文:', (result && result.error) || '无响应');
       S.failed.add(item.text); // 最终失败:降级只显示日语原文
     }
     processQueue();

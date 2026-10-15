@@ -81,7 +81,6 @@ async function startCapture(streamId) {
   // 每 7 秒把累积的 PCM 送去识别;启动后 3 秒先送一小块,首条字幕更快出
   timer = setInterval(flushChunk, CHUNK_SECONDS * 1000);
   setTimeout(flushChunk, 3000);
-  console.log('[YTSUB-ASR] 音频采集已启动');
 }
 
 // 取出累积 PCM,合并成 Uint8Array 送识别(上一块未完成则跳过,音频自然并入下一块)
