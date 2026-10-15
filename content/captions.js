@@ -156,6 +156,7 @@
 
   function onVideoChange(d) {
     if (d.videoId === S.videoId) return;
+    console.log('[YTSUB] 视频切换 →', d.videoId, d.isLive ? '直播' : '录播', '开关=' + (S.enabled ? '开' : '关'));
     S.videoId = d.videoId;
     S.isLive = !!d.isLive;
     resetVideoState();
@@ -230,15 +231,25 @@
     url = url.replace(/[?&]tlang=[^&]*/g, '');
     url = url.includes('fmt=') ? url.replace(/fmt=[^&]+/g, 'fmt=json3') : url + '&fmt=json3';
     try {
-      const res = await fetch(url);
+      // 8 秒超时,防止请求挂起阻塞后续流程
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8000);
+      const res = await fetch(url, { signal: ctrl.signal });
+      clearTimeout(timer);
       if (res.ok) {
         const body = await res.text();
+        console.log('[YTSUB] 直接拉字幕:HTTP', res.status, body.length + ' 字节');
         if (body.trim()) {
           const cues = parseJson3(JSON.parse(body));
           if (cues.length) { applyVodCues(cues); return; }
         }
+        console.log('[YTSUB] 直接拉字幕拿到的 body 为空(POT 校验)→ 改走 CC 拦截');
+      } else {
+        console.log('[YTSUB] 直接拉字幕失败 HTTP', res.status, '→ 改走 CC 拦截');
       }
-    } catch { /* 走强制 CC 拦截路径 */ }
+    } catch (err) {
+      console.log('[YTSUB] 直接拉字幕异常', String(err), '→ 改走 CC 拦截');
+    }
     forceCC();
   }
 
@@ -259,6 +270,7 @@
       if (btn.getAttribute('aria-pressed') !== 'true') {
         btn.click(); // 打开 CC,播放器会发起带签名的字幕请求
         S.ccToggledByUs = true;
+        console.log('[YTSUB] 已自动打开 CC,等待播放器请求字幕');
       } else if (!S.ccCycleDone) {
         // CC 本就开着但没拦到请求(如扩展晚于播放器加载)→ 快速关再开触发重取
         S.ccCycleDone = true;
@@ -270,6 +282,7 @@
 
   function applyVodCues(cues) {
     let added = false;
+    const before = S.cues.length;
     for (const c of cues) {
       if (!c.text || S.seenStarts.has(c.start)) continue;
       S.seenStarts.add(c.start);
@@ -277,7 +290,10 @@
       enqueue(c.text, c.start);
       added = true;
     }
-    if (added) S.cues.sort((a, b) => a.start - b.start);
+    if (added) {
+      S.cues.sort((a, b) => a.start - b.start);
+      console.log('[YTSUB] 录播字幕就绪:共 ' + S.cues.length + ' 条(新增 ' + (S.cues.length - before) + ')');
+    }
   }
 
   // ---------- 直播字幕 ----------
@@ -425,17 +441,30 @@
     }
   }
 
+  const TRANSLATE_TIMEOUT = 20000; // 后台 20 秒无响应视为失败(防挂起占死并发槽)
+
   async function translateItem(item) {
     let result = null;
     try {
-      result = await chrome.runtime.sendMessage({ type: 'translate', id: item.text, text: item.text });
-    } catch { /* SW 未就绪等,按失败重试 */ }
+      // 与超时赛跑:SW 挂起时不会无限等待,失败后走重试
+      const req = chrome.runtime.sendMessage({ type: 'translate', id: item.text, text: item.text })
+        .catch(() => ({ ok: false, error: '消息通道关闭' }));
+      result = await Promise.race([
+        req,
+        new Promise((resolve) => setTimeout(() => resolve({ ok: false, error: '后台无响应(超时)' }), TRANSLATE_TIMEOUT)),
+      ]);
+    } catch (err) {
+      console.log('[YTSUB] 翻译请求异常', String(err));
+    }
     S.inflight--;
     if (result && result.ok) {
       S.translations.set(item.text, result.text);
+      console.log('[YTSUB] 翻译完成:', JSON.stringify(item.text.slice(0, 40)), '→', JSON.stringify(result.text.slice(0, 40)));
     } else if (item.attempts < 2) {
+      console.log('[YTSUB] 翻译失败(第 ' + (item.attempts + 1) + ' 次,重试中):', (result && result.error) || '无响应');
       S.queue.push({ text: item.text, start: item.start, attempts: item.attempts + 1 }); // 重试 2 次
     } else {
+      console.log('[YTSUB] 翻译最终失败,降级显示原文:', (result && result.error) || '无响应');
       S.failed.add(item.text); // 最终失败:降级只显示日语原文
     }
     processQueue();

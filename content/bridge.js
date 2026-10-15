@@ -73,6 +73,7 @@
     if (data.videoId !== lastVideoId) {
       lastVideoId = data.videoId;
       lastTracksJson = JSON.stringify(data.tracks);
+      console.log('[YTSUB] 检测到视频', data.videoId, data.isLive ? '直播' : '录播', '日语轨 ' + data.tracks.length + ' 条');
       post({ type: 'videoChange', videoId: data.videoId, isLive: data.isLive });
       post({ type: 'playerData', ...data });
     } else {
@@ -111,7 +112,10 @@
     // 克隆后异步读文本,不消耗播放器拿到的原始响应
     res.clone().text()
       .then((body) => {
-        if (body && body.trim()) post({ type: 'captionBody', url, body, contentType: ct });
+        if (body && body.trim()) {
+          console.log('[YTSUB] 拦截到字幕响应', ct, body.length + ' 字节', url.slice(0, 150));
+          post({ type: 'captionBody', url, body, contentType: ct });
+        }
       })
       .catch(() => { /* 读失败不影响播放器 */ });
   }
@@ -152,7 +156,8 @@
     configurable: true,
     enumerable: true,
     get: () => wrappedFetch,
-    set: (v) => { origFetch = v; },
+    // 防「保存再恢复」把包装自身设回底层实现导致死循环
+    set: (v) => { if (v !== wrappedFetch) origFetch = v; },
   });
 
   // ---------- XHR 钩子 ----------

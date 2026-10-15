@@ -53,9 +53,21 @@ const MAX_TEXT_LEN = 6000;      // 单次翻译文本上限(防滥用)
 const GOOGLE_CHUNK_LEN = 4500;  // Google 接口单请求字符上限(~5000)
 const GOOGLE_MIN_INTERVAL = 350; // Google 请求最小间隔(ms),防限流
 const GOOGLE_BACKOFF = [5000, 20000]; // 429/503 退避:5s、20s,仍失败报可重试错
+const FETCH_TIMEOUT = 12000;    // 单次请求超时(ms):防止连接挂起把翻译队列永久卡死
 
 let lastGoogleCall = 0;
 let googleBusy = Promise.resolve(); // 串行化 Google 请求
+
+// 带超时的 fetch:代理/网络把连接挂起时,超时后走重试,而不是永远等下去
+async function fetchWithTimeout(url, init, timeoutMs) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, Object.assign({}, init, { signal: ctrl.signal }));
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 async function translateText(text) {
   if (typeof text !== 'string') throw new Error('翻译内容必须是文本');
@@ -120,10 +132,10 @@ async function googleRequest(chunk) {
     if (attempt > 0) await sleep(GOOGLE_BACKOFF[attempt - 1]);
     let res;
     try {
-      res = await fetch(url);
+      res = await fetchWithTimeout(url, null, FETCH_TIMEOUT);
     } catch (e) {
-      if (attempt < GOOGLE_BACKOFF.length) continue; // 网络抖动,退避重试
-      throw new Error('网络不通,无法访问 Google 翻译(请检查代理)');
+      if (attempt < GOOGLE_BACKOFF.length) continue; // 网络错误/超时,退避重试
+      throw new Error('网络不通或请求超时,无法访问 Google 翻译(请检查代理)');
     }
     if (res.status === 429 || res.status === 503) continue; // 限流,退避重试
     if (!res.ok) throw new Error(`Google 翻译服务错误(${res.status})`);
@@ -143,7 +155,7 @@ async function customTranslate(s, text) {
   const url = /\/chat\/completions$/i.test(base) ? base : base + '/chat/completions';
   let res;
   try {
-    res = await fetch(url, {
+    res = await fetchWithTimeout(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -157,9 +169,9 @@ async function customTranslate(s, text) {
         ],
         temperature: 0.2,
       }),
-    });
+    }, FETCH_TIMEOUT);
   } catch (e) {
-    throw new Error('网络不通或该 API 不允许浏览器跨域,请在设置页点「保存」授权域名');
+    throw new Error('网络不通、请求超时或该 API 不允许浏览器跨域,请在设置页点「保存」授权域名');
   }
   if (res.status === 401) throw new Error('API Key 无效,请检查设置');
   if (res.status === 404) throw new Error('接口未找到,请检查 Base URL / 模型名');

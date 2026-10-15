@@ -87,6 +87,7 @@
 
   // 按 showOriginal 与各行内容决定显隐
   function render() {
+    if (!jaEl || !zhEl || !hintEl || !boxEl || !statusEl) return; // 尚未挂载(init 前)时跳过
     const hasJa = showOriginal && !!jaEl.textContent;
     jaEl.hidden = !hasJa;
     zhEl.hidden = !zhEl.textContent;
