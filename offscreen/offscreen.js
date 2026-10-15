@@ -24,6 +24,8 @@ let pcmChunks = [];       // Int16 采样累积缓冲
 let timer = null;
 let busy = false;         // 上一块还在识别时跳过本次(音频会并入下一块)
 let language = 'ja-JP';
+let failStreak = 0;       // 识别会话连续失败次数
+let cooldownUntil = 0;    // 连续失败后的冷却截止时间(给网络恢复时间)
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg && msg.type === 'asrInit') {
@@ -86,6 +88,7 @@ async function startCapture(streamId) {
 // 取出累积 PCM,合并成 Uint8Array 送识别(上一块未完成则跳过,音频自然并入下一块)
 function flushChunk() {
   if (busy || !pcmChunks.length) return;
+  if (Date.now() < cooldownUntil) return; // 冷却中:跳过本次(音频并入下一块)
   const total = pcmChunks.reduce((n, c) => n + c.length, 0);
   if (total < SAMPLE_RATE * 2) return; // 少于 2 秒不送
   let pcm = new Int16Array(total);
@@ -107,6 +110,16 @@ function flushChunk() {
   runSession(new Uint8Array(speech.buffer, speech.byteOffset, speech.byteLength), language)
     .then((r) => {
       busy = false;
+      if (r.error) {
+        failStreak++;
+        // 连续失败 3 次 → 冷却 20 秒,给网络/代理恢复时间,避免空转烧 25 秒超时
+        if (failStreak >= 3) {
+          failStreak = 0;
+          cooldownUntil = Date.now() + 20000;
+        }
+      } else {
+        failStreak = 0;
+      }
       console.log('[YTSUB-ASR] 识别会话结束: text=' + JSON.stringify((r.text || '').slice(0, 30)) + ' error=' + (r.error || '').slice(0, 60));
       // 结果(或错误)交给 background 转发给内容脚本
       chrome.runtime.sendMessage({ type: 'asrChunkResult', text: r.text || '', error: r.error || '' })
@@ -214,7 +227,13 @@ function runSession(pcmBytes, lang) {
     ws.binaryType = 'arraybuffer';
     const received = [];
 
+    // 建连超时:网络/代理把握手挂起时快速失败(否则会挂满整个会话超时)
+    const openTimer = setTimeout(() => {
+      finish({ text: '', error: '连接语音识别服务超时(检查网络/代理)' });
+    }, 6000);
+
     ws.onopen = () => {
+      clearTimeout(openTimer);
       try {
         const req = {
           user: { uid: 'translator-for-browser' },
@@ -242,7 +261,9 @@ function runSession(pcmBytes, lang) {
     ws.onmessage = (e) => { received.push(new Uint8Array(e.data)); };
     ws.onclose = () => { finish(collectResult(received)); };
     ws.onerror = () => { finish({ text: '', error: '连接语音识别服务失败(网络/鉴权)' }); };
-    setTimeout(() => finish(collectResult(received)), 25000); // 兜底超时(长语音段识别较慢)
+    // 兜底超时:按音频时长动态设定(每 1 秒音频给 1 秒识别时间,再加 8 秒余量)
+    const audioMs = pcmBytes.length / 32;
+    setTimeout(() => finish(collectResult(received)), 8000 + audioMs);
   });
 }
 
