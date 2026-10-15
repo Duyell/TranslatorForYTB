@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>TranslatorForBrowser 设置</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main>
+    <h1>TranslatorForBrowser 设置</h1>
+    <p class="sub">YouTube 日语直播 / 视频字幕实时翻译</p>
+
+    <section>
+      <h2>翻译引擎</h2>
+      <label class="radio"><input type="radio" name="engine" value="google"> 免费 Google 翻译(默认,零配置)</label>
+      <label class="radio"><input type="radio" name="engine" value="custom"> 自定义 OpenAI 兼容 API</label>
+      <div id="customFields" class="fields" hidden>
+        <label>API Base URL
+          <input type="text" id="customBaseUrl" placeholder="https://api.deepseek.com 或 https://ark.cn-beijing.volces.com/api/v3">
+        </label>
+        <label>API Key
+          <input type="password" id="customApiKey" placeholder="sk-...">
+        </label>
+        <label>模型名
+          <input type="text" id="customModel" placeholder="deepseek-chat / doubao-1-5-pro-32k(或你的接入点 ID)">
+        </label>
+        <p class="hint">Key 只保存在本机(chrome.storage.local),不会同步到云端。</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>字幕显示</h2>
+      <label class="check"><input type="checkbox" id="showOriginal"> 同时显示日语原文(双语)</label>
+      <label class="range">字号 <input type="range" id="fontSize" min="12" max="32" step="1"> <span id="fontSizeVal"></span></label>
+      <label class="check"><input type="checkbox" id="enabled"> 新标签页默认开启字幕翻译</label>
+    </section>
+
+    <section>
+      <h2>测试</h2>
+      <button id="testBtn">测试翻译「こんにちは、世界」</button>
+      <p id="testResult" class="hint"></p>
+    </section>
+
+    <footer>
+      <button id="saveBtn" class="primary">保存</button>
+      <span id="saveStatus" class="hint"></span>
+    </footer>
+  </main>
+  <script src="options.js"></script>
+</body>
+</html>

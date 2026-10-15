@@ -1,14 +1,29 @@
 {
   "manifest_version": 3,
-  "name": "豆包小窗",
-  "version": "1.0.0",
-  "description": "点击工具栏图标,在独立小窗中打开豆包聊天页,再点一次关闭",
+  "name": "TranslatorForBrowser",
+  "version": "2.0.0",
+  "description": "在 YouTube 播放器上叠加日语自动字幕的实时中文翻译(免费 Google 翻译或自定义 OpenAI 兼容 API),支持录播与直播",
   "permissions": ["storage"],
+  "host_permissions": ["https://translate.googleapis.com/*"],
+  "optional_host_permissions": ["https://*/*"],
   "background": {
     "service_worker": "background.js"
   },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*", "https://m.youtube.com/*"],
+      "js": ["content/bridge.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://www.youtube.com/*", "https://m.youtube.com/*"],
+      "js": ["content/overlay.js", "content/captions.js"],
+      "run_at": "document_idle"
+    }
+  ],
   "action": {
-    "default_title": "打开/关闭豆包小窗",
+    "default_title": "开启/关闭字幕翻译(仅 YouTube)",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
@@ -22,12 +37,16 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
   "commands": {
     "_execute_action": {
       "suggested_key": {
         "default": "Alt+Shift+D"
       },
-      "description": "打开/关闭豆包小窗"
+      "description": "开启/关闭字幕翻译"
     }
   }
 }
