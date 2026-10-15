@@ -88,14 +88,22 @@ function flushChunk() {
   if (busy || !pcmChunks.length) return;
   const total = pcmChunks.reduce((n, c) => n + c.length, 0);
   if (total < SAMPLE_RATE * 2) return; // 少于 2 秒不送
-  const pcm = new Int16Array(total);
+  let pcm = new Int16Array(total);
   let offset = 0;
   for (const c of pcmChunks) { pcm.set(c, offset); offset += c.length; }
   pcmChunks = [];
-  const bytes = new Uint8Array(pcm.buffer);
+
+  // 缓冲过长只留最后 20 秒(识别会话意外变慢时防止积压失控)
+  const MAX_KEEP = SAMPLE_RATE * 20;
+  if (pcm.length > MAX_KEEP) pcm = pcm.subarray(pcm.length - MAX_KEEP);
+
+  // 静音检测:主播长时间不说话时缓冲里大部分是静音,
+  // 只送有效语音段,否则几十秒静音会拖慢识别甚至超时丢结果
+  const speech = trimSilence(pcm);
+  if (!speech || speech.length < SAMPLE_RATE * 0.4) return; // 无有效语音(或过短)不送
 
   busy = true;
-  runSession(bytes, language)
+  runSession(new Uint8Array(speech.buffer, speech.byteOffset, speech.byteLength), language)
     .then((r) => {
       busy = false;
       // 结果(或错误)交给 background 转发给内容脚本
@@ -103,6 +111,36 @@ function flushChunk() {
         .catch(() => { /* SW 未就绪,丢这一块 */ });
     })
     .catch(() => { busy = false; });
+}
+
+// 按 20ms 帧的能量裁剪静音:返回第一个有效帧到最后一个有效帧之间的音频
+// (前后各留 200ms 边距);全程静音返回 null
+function trimSilence(pcm) {
+  const frameLen = SAMPLE_RATE / 50; // 20ms
+  const energies = [];
+  for (let i = 0; i < pcm.length; i += frameLen) {
+    const end = Math.min(i + frameLen, pcm.length);
+    let sum = 0;
+    for (let j = i; j < end; j++) sum += pcm[j] * pcm[j];
+    energies.push(Math.sqrt(sum / (end - i)));
+  }
+  // 阈值取全局最大能量的 4%,下限 300(覆盖底噪)
+  let maxE = 0;
+  for (const e of energies) if (e > maxE) maxE = e;
+  const threshold = Math.max(300, maxE * 0.04);
+  let first = -1;
+  let last = -1;
+  for (let i = 0; i < energies.length; i++) {
+    if (energies[i] >= threshold) {
+      if (first < 0) first = i;
+      last = i;
+    }
+  }
+  if (first < 0) return null; // 全程静音
+  const pad = 10; // 前后各留 10 帧(200ms)边距
+  first = Math.max(0, first - pad);
+  last = Math.min(energies.length - 1, last + pad);
+  return pcm.subarray(first * frameLen, (last + 1) * frameLen);
 }
 
 // ---------- 火山流式识别协议 ----------
@@ -202,7 +240,7 @@ function runSession(pcmBytes, lang) {
     ws.onmessage = (e) => { received.push(new Uint8Array(e.data)); };
     ws.onclose = () => { finish(collectResult(received)); };
     ws.onerror = () => { finish({ text: '', error: '连接语音识别服务失败(网络/鉴权)' }); };
-    setTimeout(() => finish(collectResult(received)), 15000); // 兜底超时
+    setTimeout(() => finish(collectResult(received)), 25000); // 兜底超时(长语音段识别较慢)
   });
 }
 
