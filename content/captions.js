@@ -60,7 +60,13 @@
     fontSize: 20,
     enabled: true,
     targetLang: 'zh-CN',
+    translateSubtitle: true, // 翻译主播语音(视频字幕栏);关闭后只翻评论区
   };
+
+  // 「翻译主播语音」是否开启(设置里默认开,仅显式 false 才停用)
+  function subtitleEnabled() {
+    return !S.settings || S.settings.translateSubtitle !== false;
+  }
 
   // ---------- 设置 ----------
 
@@ -79,6 +85,16 @@
     S.settings = Object.assign({}, DEFAULT_SETTINGS, changes.settings.newValue || {});
     OverlayUI.setFontSize(S.settings.fontSize);
     OverlayUI.setShowOriginal(S.settings.showOriginal);
+    if (!subtitleEnabled()) {
+      // 关闭「翻译主播语音」:字幕栏完全停用、停掉语音识别(不再计费)
+      if (S.asrActive) stopAsrFallback();
+      hideNativeCaptions(false);
+      restoreCC();
+      OverlayUI.hide();
+    } else if (S.enabled) {
+      // 重新开启:重跑检测/兜底流程(幂等)
+      start();
+    }
     if (S.settings.engine !== oldEngine || S.settings.targetLang !== oldTargetLang) {
       // 引擎或目标语言变了:清掉旧译文,当前视频的字幕重新翻译
       S.translations.clear();
@@ -198,7 +214,7 @@
     S.videoId = d.videoId;
     S.isLive = !!d.isLive;
     resetVideoState();
-    if (!S.enabled) return;
+    if (!S.enabled || !subtitleEnabled()) return;
     ensureOverlay();
     if (S.isLive) {
       startLive();
@@ -401,7 +417,7 @@
 
   // 无字幕时启动标签页音频识别(background 负责采集与调用火山接口)
   async function startAsrFallback(statusText) {
-    if (S.asrActive) return; // 已在运行
+    if (S.asrActive || !subtitleEnabled()) return; // 已在运行或主播语音翻译已关
     S.source = 'asr';
     OverlayUI.setStatus(statusText || '启动语音识别…');
     let resp = null;
@@ -664,7 +680,7 @@
   }
 
   function renderTick() {
-    if (!S.enabled) return;
+    if (!S.enabled || !subtitleEnabled()) return;
     ensureOverlay();
     if (!S.videoId) return;
     if (S.source === 'asr') {

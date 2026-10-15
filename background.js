@@ -19,6 +19,7 @@ const DEFAULT_SETTINGS = {
   asrApiKey: '',    // 语音识别:新版豆包语音控制台签发的 API Key(火山方舟的 Key 不通用)
   asrLanguage: 'ja-JP', // 识别语言;留空 = 自动检测
   translateChat: true,  // 直播聊天评论翻译
+  translateSubtitle: true, // 翻译主播语音(视频字幕栏)
   targetLang: 'zh-CN',  // 译文目标语言(zh-CN/zh-TW/en/ko 等)
 };
 
