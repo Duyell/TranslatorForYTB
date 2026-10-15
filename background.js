@@ -335,18 +335,29 @@ const YOUTUBE_RE = /^https?:\/\/(www|m)\.youtube\.com\//i;
 
 chrome.action.onClicked.addListener(async (tab) => {
   if (tab.url && YOUTUBE_RE.test(tab.url)) {
-    // 扩展已开启且语音识别等待授权时,本次点击用于「授权并启动 ASR」而不是开关
-    // (tabCapture 要求用户手势:getMediaStreamId 必须在这个点击上下文里调用)
+    console.log('[YTSUB] 图标点击,标签', tab.id);
+    // 先在手势上下文里立刻申请标签页音频流(tabCapture 对时序敏感,
+    // 任何 await 都可能错失授权窗口):需要授权时直接用它启动 ASR,
+    // 不需要时丢弃(未消费的流会自动过期,无副作用)
+    let preStreamId = null;
     try {
-      const state = await chrome.tabs.sendMessage(tab.id, { type: 'getState' });
-      if (state && state.enabled) {
+      preStreamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
+      console.log('[YTSUB] 点击即申请流:成功');
+    } catch (err) {
+      console.log('[YTSUB] 点击即申请流:失败 —', err.message || String(err));
+    }
+    let state = null;
+    try { state = await chrome.tabs.sendMessage(tab.id, { type: 'getState' }); } catch { /* 未就绪 */ }
+    if (state && state.enabled) {
+      // 扩展已开启且语音识别等待授权时,本次点击用于「授权并启动 ASR」而不是开关
+      try {
         const auth = await chrome.tabs.sendMessage(tab.id, { type: 'getAsrAuthState' });
         if (auth && auth.needsAuth) {
-          await authorizeAsr(tab.id);
+          await authorizeAsr(tab.id, preStreamId);
           return;
         }
-      }
-    } catch { /* 内容脚本未就绪,走普通开关 */ }
+      } catch { /* 未就绪,走普通开关 */ }
+    }
     try {
       const resp = await chrome.tabs.sendMessage(tab.id, { type: 'toggle' });
       updateBadge(tab.id, resp && resp.enabled);
@@ -359,20 +370,22 @@ chrome.action.onClicked.addListener(async (tab) => {
   }
 });
 
-// 用户手势上下文里授权标签页音频并启动 ASR
-async function authorizeAsr(tabId) {
+// 用户手势上下文里授权标签页音频并启动 ASR(preStreamId 为点击时预申请的流)
+async function authorizeAsr(tabId, preStreamId) {
   try {
     const s = await getSettings();
     if (!s.asrApiKey) throw new Error('未配置语音识别 API Key(设置页 → 语音识别)');
     await applyAsrDnrRules();
-    let streamId;
-    try {
-      streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
-    } catch (err) {
-      // 授权状态可能晚于点击处理器生效:稍等重试一次
-      console.log('[YTSUB-ASR] 授权第一次申请失败,600ms 后重试:', err.message || String(err));
-      await sleep(600);
-      streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+    let streamId = preStreamId;
+    if (!streamId) {
+      try {
+        streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+      } catch (err) {
+        // 授权状态可能晚于点击处理器生效:稍等重试一次
+        console.log('[YTSUB-ASR] 授权第一次申请失败,600ms 后重试:', err.message || String(err));
+        await sleep(600);
+        streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+      }
     }
     await createOffscreen();
     const resp = await chrome.runtime.sendMessage({ type: 'asrInit', streamId, language: s.asrLanguage || 'ja-JP' });

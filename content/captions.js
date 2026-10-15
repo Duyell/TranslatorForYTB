@@ -369,6 +369,11 @@
           btn.click();
           S.ccToggledByUs = true;
         }
+        // 直播可能有多个字幕轨,默认轨可能是英文:请求播放器切到日语轨
+        if (!S.jaSwitchRequested) {
+          S.jaSwitchRequested = true;
+          postCtrl({ type: 'setCaptionTrack', languageCode: 'ja' });
+        }
       }
       // 10 秒内拿不到直播字幕 → 该直播实际没有字幕,语音识别兜底
       if (waited >= 10000 && !S.asrActive) {
@@ -564,11 +569,21 @@
     if (!S.enabled || !S.videoId) return;
     try {
       const url = d.url;
-      if (url.includes('tlang=')) return; // 翻译轨,只要原始日语
+      if (url.includes('tlang=')) return; // 翻译轨,只要原始语言
       if (!S.isLive) {
         // 录播:只收当前视频的请求;非日语轨 → 请求切轨(一次),播放器会重新请求
         const v = url.match(/[?&]v=([^&]+)/);
         if (v && v[1] !== S.videoId) return;
+        const lang = url.match(/[?&]lang=([^&]+)/);
+        if (lang && decodeURIComponent(lang[1]) !== 'ja') {
+          if (!S.jaSwitchRequested) {
+            S.jaSwitchRequested = true;
+            postCtrl({ type: 'setCaptionTrack', languageCode: 'ja' });
+          }
+          return;
+        }
+      } else {
+        // 直播:URL 若带 lang 且不是日语 → 同样请求切轨并忽略本条(默认轨可能是英文)
         const lang = url.match(/[?&]lang=([^&]+)/);
         if (lang && decodeURIComponent(lang[1]) !== 'ja') {
           if (!S.jaSwitchRequested) {

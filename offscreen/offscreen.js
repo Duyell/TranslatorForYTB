@@ -78,8 +78,9 @@ async function startCapture(streamId) {
     pcmChunks.push(pcm);
   };
 
-  // 每 7 秒把累积的 PCM 送去识别
+  // 每 7 秒把累积的 PCM 送去识别;启动后 3 秒先送一小块,首条字幕更快出
   timer = setInterval(flushChunk, CHUNK_SECONDS * 1000);
+  setTimeout(flushChunk, 3000);
   console.log('[YTSUB-ASR] 音频采集已启动');
 }
 
@@ -93,8 +94,8 @@ function flushChunk() {
   for (const c of pcmChunks) { pcm.set(c, offset); offset += c.length; }
   pcmChunks = [];
 
-  // 缓冲过长只留最后 20 秒(识别会话意外变慢时防止积压失控)
-  const MAX_KEEP = SAMPLE_RATE * 20;
+  // 缓冲过长只留最后 30 秒(识别会话意外变慢时防止积压失控)
+  const MAX_KEEP = SAMPLE_RATE * 30;
   if (pcm.length > MAX_KEEP) pcm = pcm.subarray(pcm.length - MAX_KEEP);
 
   // 静音检测:主播长时间不说话时缓冲里大部分是静音,
