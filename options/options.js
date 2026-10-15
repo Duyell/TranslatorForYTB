@@ -104,6 +104,34 @@ async function testTranslate() {
   }
 }
 
+// 导出当前设置到 JSON 文件(含 API Key,明文 —— 提示用户妥善保管)
+async function exportSettings() {
+  const { settings } = await chrome.storage.local.get('settings');
+  const blob = new Blob([JSON.stringify({ settings: settings || {} }, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'translatorforytb-settings.json';
+  a.click();
+  URL.revokeObjectURL(url);
+  $('importResult').textContent = '✅ 已导出 translatorforytb-settings.json';
+}
+
+// 从 JSON 文件导入设置(直接写入 storage,各页面实时生效)
+async function importSettings(file) {
+  try {
+    const text = await file.text();
+    const data = JSON.parse(text);
+    const s = data.settings;
+    if (!s || typeof s !== 'object') throw new Error('文件格式不正确(缺少 settings 字段)');
+    await chrome.storage.local.set({ settings: Object.assign({}, DEFAULT_SETTINGS, s) });
+    await init(); // 刷新表单
+    $('importResult').textContent = '✅ 导入成功。若用了自定义引擎,请再点一次「保存」以授权其域名';
+  } catch (e) {
+    $('importResult').textContent = '❌ 导入失败: ' + (e.message || String(e));
+  }
+}
+
 // 测试识别 Key:先落盘,再用静音音频探测 Key 有效性(经 background)
 async function testAsr() {
   $('asrTestResult').textContent = '测试中…';
@@ -131,4 +159,10 @@ document.addEventListener('DOMContentLoaded', () => {
   $('saveBtn').addEventListener('click', () => save(false));
   $('testBtn').addEventListener('click', testTranslate);
   $('asrTestBtn').addEventListener('click', testAsr);
+  $('exportBtn').addEventListener('click', exportSettings);
+  $('importBtn').addEventListener('click', () => $('importFile').click());
+  $('importFile').addEventListener('change', (e) => {
+    if (e.target.files && e.target.files[0]) importSettings(e.target.files[0]);
+    e.target.value = ''; // 允许重复导入同一文件
+  });
 });

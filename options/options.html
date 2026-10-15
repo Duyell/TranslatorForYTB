@@ -60,6 +60,16 @@
       <p id="testResult" class="hint"></p>
     </section>
 
+    <section>
+      <h2>配置备份</h2>
+      <p class="hint">重装扩展或换设备前先「导出配置」,之后用「导入配置」一键恢复。
+        注意:导出文件包含 API Key(明文),请妥善保管。</p>
+      <button id="exportBtn">导出配置</button>
+      <button id="importBtn">导入配置</button>
+      <input type="file" id="importFile" accept="application/json" hidden>
+      <p id="importResult" class="hint"></p>
+    </section>
+
     <footer>
       <button id="saveBtn" class="primary">保存</button>
       <span id="saveStatus" class="hint"></span>
