@@ -1,3 +1,7 @@
 Thumbs.db
 .DS_Store
 Desktop.ini
+
+# 扩展打包产物:私钥泄露等于把扩展身份交给别人,绝不能提交
+*.pem
+*.crx
