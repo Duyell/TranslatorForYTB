@@ -408,7 +408,6 @@
     } catch (err) {
       resp = { ok: false, error: String(err) };
     }
-    console.log('[YTSUB] asrStart 结果:', resp ? (resp.ok ? '成功' : '失败 — ' + resp.error) : '无响应');
     if (!resp || !resp.ok) {
       S.asrError = (resp && resp.error) || '语音识别启动失败';
       // tabCapture 需要用户手势:提示点一次工具栏图标完成授权(授权后自动启动)
@@ -427,6 +426,7 @@
       return;
     }
     S.asrActive = true;
+    S.asrError = ''; // 成功启动:清掉可能残留的旧错误
   }
 
   // 授权失败自动重试:Chrome 的 activeTab 授权状态可能晚于点击生效,
@@ -448,12 +448,12 @@
     S.asrAuthNeeded = false;
     S.asrAuthAttempts = 0;
     S.asrActive = true;
+    S.asrError = ''; // 关键:清掉自动尝试失败留下的旧错误,否则渲染循环会把它再显示出来
     S.source = 'asr';
     OverlayUI.setStatus('语音识别已启动,等待说话…');
   }
 
   function onAsrAuthFailed(error) {
-    console.log('[YTSUB] asrAuthFailed:', error);
     S.asrError = '语音识别启动失败: ' + (error || '未知错误');
     if (/invoked|activeTab/i.test(S.asrError)) {
       // 点击授权的尝试也撞上授权状态晚到:保持等待并自动重试
