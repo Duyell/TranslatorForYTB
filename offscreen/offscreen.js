@@ -19,6 +19,7 @@ const SAMPLE_RATE = 16000;
 let audioCtx = null;
 let source = null;
 let processor = null;
+let playback = null;      // 捕获音频的回放元素(见 startCapture 内的说明)
 let pcmChunks = [];       // Int16 采样累积缓冲
 let timer = null;
 let busy = false;         // 上一块还在识别时跳过本次(音频会并入下一块)
@@ -59,6 +60,12 @@ async function startCapture(streamId) {
   processor = audioCtx.createScriptProcessor(4096, 1, 1);
   source.connect(processor);
   processor.connect(audioCtx.destination); // 不接 destination 部分浏览器不回调
+
+  // 关键:tabCapture 捕获时 Chrome 会静音标签页,必须把音频播回扬声器,
+  // 否则用户听不到任何声音。tabCapture 权限的扩展不受自动播放策略限制。
+  playback = new Audio();
+  playback.srcObject = stream;
+  playback.play().catch(() => { /* 播放被拒时至少识别还能工作 */ });
 
   // Float32(-1..1) → Int16 PCM
   processor.onaudioprocess = (e) => {
@@ -220,6 +227,7 @@ function collectResult(received) {
 // 页面被关闭时清理
 window.addEventListener('pagehide', () => {
   if (timer) clearInterval(timer);
+  if (playback) { try { playback.pause(); playback.srcObject = null; } catch { /* 忽略 */ } }
   if (source) { try { source.disconnect(); } catch { /* 忽略 */ } }
   if (audioCtx) { try { audioCtx.close(); } catch { /* 忽略 */ } }
 });
