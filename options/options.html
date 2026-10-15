@@ -36,6 +36,21 @@
     </section>
 
     <section>
+      <h2>语音识别(无字幕时兜底)</h2>
+      <p class="hint">YouTube 没有字幕时,用火山引擎把声音实时转成文字(约 7 秒延迟)。
+        需在<a href="https://console.volcengine.com/speech/app" target="_blank">豆包语音控制台</a>
+        开通「录音文件识别大模型-极速版」并签发 API Key(<b>火山方舟的 Key 不通用</b>)。按转写时长计费。</p>
+      <label>API Key
+        <input type="password" id="asrApiKey" placeholder="豆包语音控制台签发的 Key">
+      </label>
+      <label>识别语言
+        <input type="text" id="asrLanguage" placeholder="ja-JP(留空 = 自动检测)">
+      </label>
+      <button id="asrTestBtn">测试识别 Key</button>
+      <p id="asrTestResult" class="hint"></p>
+    </section>
+
+    <section>
       <h2>测试</h2>
       <button id="testBtn">测试翻译「こんにちは、世界」</button>
       <p id="testResult" class="hint"></p>

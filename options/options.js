@@ -12,6 +12,8 @@ const DEFAULT_SETTINGS = {
   showOriginal: true,
   fontSize: 20,
   enabled: true,
+  asrApiKey: '',
+  asrLanguage: 'ja-JP',
 };
 
 const $ = (id) => document.getElementById(id);
@@ -27,6 +29,8 @@ async function init() {
   $('fontSize').value = s.fontSize;
   $('fontSizeVal').textContent = s.fontSize + ' px';
   $('enabled').checked = s.enabled;
+  $('asrApiKey').value = s.asrApiKey;
+  $('asrLanguage').value = s.asrLanguage;
   syncEngineUI();
 }
 
@@ -44,6 +48,8 @@ function collect() {
     showOriginal: $('showOriginal').checked,
     fontSize: Number($('fontSize').value),
     enabled: $('enabled').checked,
+    asrApiKey: $('asrApiKey').value.trim(),
+    asrLanguage: $('asrLanguage').value.trim(),
   };
 }
 
@@ -92,6 +98,24 @@ async function testTranslate() {
   }
 }
 
+// 测试识别 Key:先落盘,再用静音音频探测 Key 有效性(经 background)
+async function testAsr() {
+  $('asrTestResult').textContent = '测试中…';
+  try {
+    await save(true);
+  } catch (e) {
+    $('asrTestResult').textContent = '❌ ' + e.message;
+    return;
+  }
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: 'asrTest' });
+    if (resp && resp.ok) $('asrTestResult').textContent = '✅ ' + resp.text;
+    else $('asrTestResult').textContent = '❌ ' + ((resp && resp.error) || '未知错误');
+  } catch (e) {
+    $('asrTestResult').textContent = '❌ ' + (e.message || '扩展后台未响应,请重新加载扩展');
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   init();
   for (const r of document.querySelectorAll('input[name="engine"]')) {
@@ -100,4 +124,5 @@ document.addEventListener('DOMContentLoaded', () => {
   $('fontSize').addEventListener('input', () => { $('fontSizeVal').textContent = $('fontSize').value + ' px'; });
   $('saveBtn').addEventListener('click', () => save(false));
   $('testBtn').addEventListener('click', testTranslate);
+  $('asrTestBtn').addEventListener('click', testAsr);
 });

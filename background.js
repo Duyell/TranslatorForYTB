@@ -16,6 +16,8 @@ const DEFAULT_SETTINGS = {
   showOriginal: true,
   fontSize: 20,
   enabled: true,
+  asrApiKey: '',    // 语音识别:新版豆包语音控制台签发的 API Key(火山方舟的 Key 不通用)
+  asrLanguage: 'ja-JP', // 识别语言;留空 = 自动检测
 };
 
 let settings = null; // 设置缓存(SW 常被回收,首次使用时从 storage 读)
@@ -42,6 +44,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // 异步翻译,return true 保持消息通道
     translateText(msg.text)
       .then((text) => sendResponse({ ok: true, text }))
+      .catch((err) => sendResponse({ ok: false, error: err.message || String(err) }));
+    return true;
+  }
+  if (msg.type === 'asrStart') {
+    startAsr(sender.tab && sender.tab.id)
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ ok: false, error: err.message || String(err) }));
+    return true;
+  }
+  if (msg.type === 'asrStop') {
+    stopAsr().then(() => sendResponse({ ok: true }));
+    return true;
+  }
+  if (msg.type === 'asrAudio') {
+    // 来自 offscreen 文档的音频分块:sender.tab 不存在,结果转发用 asrTabId
+    handleAsrAudio(msg)
+      .then((r) => sendResponse(r))
+      .catch((err) => sendResponse({ ok: false, error: err.message || String(err) }));
+    return true;
+  }
+  if (msg.type === 'asrTest') {
+    // 设置页「测试识别」:静音 WAV 探测 Key 是否有效
+    testAsrKey()
+      .then((r) => sendResponse(r))
       .catch((err) => sendResponse({ ok: false, error: err.message || String(err) }));
     return true;
   }
@@ -180,6 +206,172 @@ async function customTranslate(s, text) {
   const out = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
   if (!out) throw new Error('API 返回为空,请检查模型名');
   return String(out).trim();
+}
+
+// ---------- 实时语音识别(ASR,火山引擎极速版) ----------
+
+const ASR_URL = 'https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash';
+const ASR_RESOURCE_ID = 'volc.bigasr.auc_turbo'; // 极速版固定资源 ID
+const ASR_FETCH_TIMEOUT = 15000; // 识别请求超时(ms)
+
+let asrTabId = null; // 正在采集音频的目标标签页 id
+
+// 内容脚本请求开启 ASR:申请标签页音频流 → 建 offscreen 文档消费
+async function startAsr(tabId) {
+  if (tabId == null) throw new Error('无法确定目标标签页');
+  const s = await getSettings();
+  if (!s.asrApiKey) throw new Error('未配置语音识别 API Key(设置页 → 语音识别)');
+  if (asrTabId === tabId && (await hasOffscreen())) return; // 已在运行
+  await stopAsr(); // 先清掉上一轮(切换标签/重启采集)
+  // Chrome 116+:SW 可带 targetTabId 直接申请流,无需用户手势
+  let streamId;
+  try {
+    streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+  } catch (err) {
+    throw new Error('无法捕获标签页音频: ' + (err.message || String(err)));
+  }
+  await createOffscreen();
+  const resp = await chrome.runtime.sendMessage({ type: 'asrInit', streamId });
+  if (!resp || !resp.ok) throw new Error((resp && resp.error) || '音频采集启动失败');
+  asrTabId = tabId;
+  console.log('[YTSUB-ASR] 已启动,目标标签', tabId);
+}
+
+async function stopAsr() {
+  asrTabId = null;
+  try { await chrome.offscreen.closeDocument(); } catch { /* 已关闭 */ }
+}
+
+async function hasOffscreen() {
+  try {
+    const contexts = await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
+    return contexts.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function createOffscreen() {
+  if (await hasOffscreen()) return;
+  await chrome.offscreen.createDocument({
+    url: 'offscreen/offscreen.html',
+    reasons: ['USER_MEDIA'],
+    justification: '采集标签页音频用于实时语音识别(无字幕时的兜底方案)',
+  });
+}
+
+// offscreen 每 7 秒发来一块 WAV(Base64)→ 调极速版识别 → 转发给内容脚本
+async function handleAsrAudio(msg) {
+  const tabId = asrTabId;
+  let text = '';
+  let error = null;
+  try {
+    text = await transcribeChunk(msg.wavBase64);
+  } catch (err) {
+    error = err.message || String(err);
+    console.log('[YTSUB-ASR] 识别失败:', error);
+  }
+  if (tabId != null) {
+    try { await chrome.tabs.sendMessage(tabId, { type: 'asrResult', text, error }); } catch { /* 标签已关闭 */ }
+  }
+  return { ok: true, text };
+}
+
+// 火山极速版识别:base64 WAV → 文本。状态在响应头 X-Api-Status-Code
+// (HTTP 状态码可能恒为 200):20000000 成功 / 20000003 静音空结果
+async function transcribeChunk(wavBase64) {
+  const s = await getSettings();
+  if (!s.asrApiKey) throw new Error('未配置语音识别 API Key');
+  const audio = { data: wavBase64 };
+  if (s.asrLanguage) audio.language = s.asrLanguage;
+  let lastErr = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) await sleep(2000); // 重试一次(网络抖动/服务繁忙)
+    let res;
+    try {
+      res = await fetchWithTimeout(ASR_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Api-Key': s.asrApiKey.trim(),
+          'X-Api-Resource-Id': ASR_RESOURCE_ID,
+          'X-Api-Request-Id': crypto.randomUUID(),
+          'X-Api-Sequence': '-1',
+        },
+        body: JSON.stringify({
+          user: { uid: 'translator-for-browser' },
+          audio,
+          request: {
+            model_name: 'bigmodel',
+            enable_punc: true,
+            enable_itn: true,
+            enable_ddc: false,
+            show_utterances: true,
+          },
+        }),
+      }, ASR_FETCH_TIMEOUT);
+    } catch (err) {
+      lastErr = new Error('语音识别请求失败(网络/超时)');
+      continue;
+    }
+    const status = res.headers.get('X-Api-Status-Code') || '';
+    if (status === '20000003') return ''; // 静音:无有效语音
+    if (status !== '20000000') {
+      if (res.status === 401 || res.status === 403) {
+        throw new Error('语音识别 API Key 无效(注意:需要新版豆包语音控制台的 Key,火山方舟的 Key 不通用)');
+      }
+      if (/^550/.test(status) || res.status === 429) {
+        lastErr = new Error('语音识别服务繁忙(' + status + ')');
+        continue; // 可重试
+      }
+      throw new Error('语音识别失败: ' + (status || 'HTTP ' + res.status));
+    }
+    const data = await res.json();
+    return String((data && data.result && data.result.text) || '').trim();
+  }
+  throw lastErr || new Error('语音识别失败');
+}
+
+// 设置页「测试识别」:发一段静音 WAV 探测 Key 有效性
+// (服务端先校验参数再鉴权,静音返回 20000003 = Key 有效;401/403 = Key 无效)
+async function testAsrKey() {
+  const s = await getSettings();
+  if (!s.asrApiKey) throw new Error('请先填写语音识别 API Key');
+  const sampleRate = 16000;
+  const numSamples = sampleRate; // 1 秒静音
+  const wav = new Uint8Array(44 + numSamples * 2);
+  const view = new DataView(wav.buffer);
+  const ascii = (off, str) => { for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i)); };
+  ascii(0, 'RIFF'); view.setUint32(4, 36 + numSamples * 2, true); ascii(8, 'WAVE');
+  ascii(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true); view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  ascii(36, 'data'); view.setUint32(40, numSamples * 2, true);
+  let bin = '';
+  for (let i = 0; i < wav.length; i += 0x8000) bin += String.fromCharCode.apply(null, wav.subarray(i, i + 0x8000));
+  const base64 = btoa(bin);
+
+  const res = await fetchWithTimeout(ASR_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Api-Key': s.asrApiKey.trim(),
+      'X-Api-Resource-Id': ASR_RESOURCE_ID,
+      'X-Api-Request-Id': crypto.randomUUID(),
+      'X-Api-Sequence': '-1',
+    },
+    body: JSON.stringify({
+      user: { uid: 'translator-for-browser' },
+      audio: { data: base64 },
+      request: { model_name: 'bigmodel' },
+    }),
+  }, ASR_FETCH_TIMEOUT);
+  const status = res.headers.get('X-Api-Status-Code') || '';
+  if (status === '20000000' || status === '20000003') return { ok: true, text: 'Key 有效 ✓' };
+  if (res.status === 401 || res.status === 403) {
+    throw new Error('Key 无效或未开通极速版服务(需在豆包语音控制台开通「录音文件识别大模型-极速版」)');
+  }
+  throw new Error('识别服务返回: ' + (status || 'HTTP ' + res.status));
 }
 
 // ---------- 工具栏按钮 ----------

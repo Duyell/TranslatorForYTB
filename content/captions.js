@@ -36,6 +36,10 @@
     jaSwitchRequested: false, // 是否已请求 bridge 切到日语字幕轨
     liveStatus: 'waiting',  // 直播状态:'waiting' | 'none' | 'ok'
     liveStarted: false,     // 本视频是否已跑过 startLive(避免重复启动)
+    asrActive: false,       // 语音识别(ASR)是否在运行(无字幕时的兜底)
+    asrCue: null,           // ASR 最新识别结果:{text, time}
+    asrError: '',           // ASR 错误文案(如未配置 Key)
+    source: 'captions',     // 当前字幕来源:'captions' | 'asr'
     tracksReceived: false,  // 本视频是否拿到过 captionTracks
     trackTimer: null,       // 等待/重试 captionTracks 的定时器
     renderTimer: null,      // 渲染循环定时器
@@ -95,11 +99,12 @@
     else if (d.type === 'captionBody') onCaptionBody(d);
   });
 
-  // background → 本脚本(开关/状态查询)
+  // background → 本脚本(开关/状态查询/ASR 识别结果)
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!msg) return;
     if (msg.type === 'toggle') { toggle(); sendResponse({ enabled: S.enabled }); }
     else if (msg.type === 'getState') { sendResponse({ enabled: S.enabled }); }
+    else if (msg.type === 'asrResult') { onAsrResult(msg); sendResponse({}); }
   });
 
   // ---------- 开关 ----------
@@ -121,6 +126,7 @@
     S.enabled = false;
     hideNativeCaptions(false);
     restoreCC();
+    if (S.asrActive) stopAsrFallback(); // 关闭时停掉语音识别(不再产生调用费用)
     OverlayUI.hide();
   }
 
@@ -165,12 +171,15 @@
     if (S.isLive) {
       startLive();
     } else {
-      // 录播:tracks 由随后的 playerData 消息带来;超时主动索取一次,仍无则提示
+      // 录播:tracks 由随后的 playerData 消息带来;超时主动索取一次,
+      // 仍无日语轨 → 启动语音识别兜底(ASR)
       OverlayUI.setStatus('等待字幕数据…');
       S.trackTimer = setTimeout(() => {
         postCtrl({ type: 'getPlayerData' });
         S.trackTimer = setTimeout(() => {
-          if (!S.tracksReceived && S.enabled) OverlayUI.setStatus('本视频无日语字幕');
+          if (!S.tracksReceived && S.enabled && S.videoId === d.videoId) {
+            startAsrFallback('无日语字幕,启动语音识别…');
+          }
         }, 4000);
       }, 2500);
     }
@@ -194,6 +203,8 @@
     S.tracksReceived = false;
     S.shownKey = '';
     S.lastCue = null;
+    S.asrCue = null;    // 换视频后旧的识别结果不显示
+    S.asrError = '';
     clearTimeout(S.trackTimer);
     OverlayUI.hide();
   }
@@ -262,7 +273,8 @@
       if (!S.enabled || S.videoId !== vid || S.cues.length) { clearInterval(iv); return; } // 已拿到字幕或已切视频
       if (waited >= 15000) {
         clearInterval(iv);
-        OverlayUI.setStatus('无法获取字幕(该视频可能无自动字幕)');
+        // 字幕拿不到 → 语音识别兜底
+        startAsrFallback('无法获取字幕,启动语音识别…');
         return;
       }
       const btn = document.querySelector('.ytp-subtitles-button');
@@ -281,6 +293,7 @@
   }
 
   function applyVodCues(cues) {
+    if (S.asrActive) stopAsrFallback(); // 拿到字幕了,停掉语音识别
     let added = false;
     const before = S.cues.length;
     for (const c of cues) {
@@ -312,7 +325,8 @@
         clearInterval(iv);
         if (!S.latestLiveCue) {
           S.liveStatus = 'none';
-          OverlayUI.setStatus('本直播无自动字幕(主播可能未开启)');
+          // 直播无自动字幕 → 语音识别兜底
+          startAsrFallback('本直播无自动字幕,启动语音识别…');
         }
         return;
       }
@@ -327,6 +341,7 @@
   }
 
   function applyLiveCues(cues) {
+    if (S.asrActive) stopAsrFallback(); // 直播有字幕了,停掉语音识别
     const now = Date.now();
     for (const c of cues) {
       const key = c.start + '|' + c.text;
@@ -342,6 +357,61 @@
       S.liveStatus = 'ok';
       enqueue(c.text, c.start);
     }
+  }
+
+  // ---------- 语音识别兜底(ASR) ----------
+
+  // 无字幕时启动标签页音频识别(background 负责采集与调用火山接口)
+  async function startAsrFallback(statusText) {
+    if (S.asrActive) return; // 已在运行
+    S.asrActive = true;
+    S.source = 'asr';
+    OverlayUI.setStatus(statusText || '启动语音识别…');
+    let resp = null;
+    try {
+      resp = await chrome.runtime.sendMessage({ type: 'asrStart' });
+    } catch (err) {
+      resp = { ok: false, error: String(err) };
+    }
+    if (!resp || !resp.ok) {
+      S.asrError = (resp && resp.error) || '语音识别启动失败';
+      OverlayUI.setStatus(S.asrError);
+    }
+  }
+
+  // 停掉语音识别(拿到字幕 / 开关关闭时)
+  function stopAsrFallback() {
+    S.asrActive = false;
+    S.source = 'captions';
+    try { chrome.runtime.sendMessage({ type: 'asrStop' }); } catch { /* 忽略 */ }
+  }
+
+  // background 转发的识别结果:静音块忽略,有文本则显示最新一条并翻译
+  function onAsrResult(d) {
+    if (!S.enabled || !S.asrActive) return;
+    if (d.error) {
+      S.asrError = '语音识别失败: ' + d.error;
+      if (S.source === 'asr') OverlayUI.setStatus(S.asrError);
+      return;
+    }
+    const text = (d.text || '').trim();
+    if (!text) return;
+    S.asrError = '';
+    S.asrCue = { text, time: Date.now() };
+    enqueue(text, currentTimeMs());
+  }
+
+  function renderAsr() {
+    const cue = S.asrCue;
+    if (!cue) {
+      OverlayUI.setStatus(S.asrError || '语音识别中,等待说话…');
+      return;
+    }
+    const zh = S.translations.get(cue.text) ?? null;
+    const failed = S.failed.has(cue.text);
+    OverlayUI.setCue({ ja: cue.text, zh, pending: !zh && !failed, failed });
+    // 超过 10 秒没有新识别结果(如静音/说话间隙)→ 淡化
+    OverlayUI.setStale(Date.now() - cue.time > 10000);
   }
 
   // ---------- 字幕解析 ----------
@@ -486,6 +556,11 @@
     if (!S.enabled) return;
     ensureOverlay();
     if (!S.videoId) return;
+    if (S.source === 'asr') {
+      renderAsr();
+      processQueue(); // 顺带驱动翻译队列(优先级随时间刷新)
+      return;
+    }
     if (S.isLive) renderLive();
     else renderVod();
     processQueue(); // 顺带驱动翻译队列(优先级随时间刷新)
