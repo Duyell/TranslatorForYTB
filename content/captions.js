@@ -107,7 +107,10 @@
     if (!msg) return;
     if (msg.type === 'toggle') { toggle(); sendResponse({ enabled: S.enabled }); }
     else if (msg.type === 'getState') { sendResponse({ enabled: S.enabled }); }
-    else if (msg.type === 'getAsrAuthState') { sendResponse({ needsAuth: S.asrAuthNeeded }); }
+    else if (msg.type === 'getAsrAuthState') {
+      console.log('[YTSUB] 图标点击查询授权状态: needsAuth=' + S.asrAuthNeeded + ' active=' + S.asrActive);
+      sendResponse({ needsAuth: S.asrAuthNeeded });
+    }
     else if (msg.type === 'asrResult') { onAsrResult(msg); sendResponse({}); }
     else if (msg.type === 'asrReady') { onAsrReady(); sendResponse({}); }
     else if (msg.type === 'asrAuthFailed') { onAsrAuthFailed(msg.error); sendResponse({}); }
@@ -126,9 +129,30 @@
     startRenderLoop();
     // 页面可能已加载完,bridge 的历史事件已错过,主动索取一次播放器数据
     postCtrl({ type: 'getPlayerData' });
-    // 重新开启时若当前视频仍没有字幕来源,重新走语音识别兜底
-    if (S.videoId && S.source === 'asr' && !S.asrActive && !S.asrAuthNeeded) {
+    if (!S.videoId) return;
+    // 重新开启时若之前用的是语音识别 → 直接重启识别(授权在同标签内仍有效)
+    if (S.source === 'asr' && !S.asrActive && !S.asrAuthNeeded) {
       startAsrFallback('启动语音识别…');
+      return;
+    }
+    // 之前没拿到任何字幕 → 重跑检测/兜底流程(否则会永远停在「等待字幕」)
+    if (S.cues.length === 0 && !S.latestLiveCue) {
+      S.liveStarted = false;
+      S.tracksReceived = false;
+      clearTimeout(S.trackTimer);
+      if (S.isLive) {
+        startLive();
+      } else {
+        OverlayUI.setStatus('等待字幕数据…');
+        S.trackTimer = setTimeout(() => {
+          postCtrl({ type: 'getPlayerData' });
+          S.trackTimer = setTimeout(() => {
+            if (!S.tracksReceived && S.enabled && S.videoId) {
+              startAsrFallback('无日语字幕,启动语音识别…');
+            }
+          }, 4000);
+        }, 1500);
+      }
     }
   }
 
@@ -307,6 +331,7 @@
 
   function applyVodCues(cues) {
     if (S.asrActive) stopAsrFallback(); // 拿到字幕了,停掉语音识别
+    S.source = 'captions';
     let added = false;
     const before = S.cues.length;
     for (const c of cues) {
@@ -360,6 +385,7 @@
 
   function applyLiveCues(cues) {
     if (S.asrActive) stopAsrFallback(); // 直播有字幕了,停掉语音识别
+    S.source = 'captions';
     const now = Date.now();
     for (const c of cues) {
       const key = c.start + '|' + c.text;
@@ -390,6 +416,7 @@
     } catch (err) {
       resp = { ok: false, error: String(err) };
     }
+    console.log('[YTSUB] asrStart 结果:', resp ? (resp.ok ? '成功' : '失败: ' + resp.error) : '无响应');
     if (!resp || !resp.ok) {
       S.asrError = (resp && resp.error) || '语音识别启动失败';
       // tabCapture 需要用户手势:提示点一次工具栏图标完成授权(授权后自动启动)
@@ -426,6 +453,7 @@
 
   // 用户点了图标完成授权,SW 已启动采集 → 激活 ASR 显示
   function onAsrReady() {
+    console.log('[YTSUB] 收到 asrReady,ASR 激活');
     S.asrAuthNeeded = false;
     S.asrAuthAttempts = 0;
     S.asrActive = true;
@@ -434,6 +462,7 @@
   }
 
   function onAsrAuthFailed(error) {
+    console.log('[YTSUB] 收到 asrAuthFailed:', error);
     S.asrError = '语音识别启动失败: ' + (error || '未知错误');
     if (/invoked|activeTab/i.test(S.asrError)) {
       // 点击授权的尝试也撞上授权状态晚到:保持等待并自动重试
@@ -446,10 +475,10 @@
     OverlayUI.setStatus(S.asrError);
   }
 
-  // 停掉语音识别(拿到字幕 / 开关关闭时)
+  // 停掉语音识别(拿到字幕 / 开关关闭时)。
+  // 注意:不在这里改 S.source —— 关闭再开启时要靠 source 判断是否重启识别
   function stopAsrFallback() {
     S.asrActive = false;
-    S.source = 'captions';
     try { chrome.runtime.sendMessage({ type: 'asrStop' }); } catch { /* 忽略 */ }
   }
 

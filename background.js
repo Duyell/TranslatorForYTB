@@ -155,7 +155,8 @@ function chunkBySentence(text, maxLen) {
 }
 
 async function googleRequest(chunk) {
-  const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=ja&tl=zh-CN&dt=t&q=' + encodeURIComponent(chunk);
+  // sl=auto:主播说话常夹杂英文单词/句子,自动检测源语言(日/英都翻成中文)
+  const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=zh-CN&dt=t&q=' + encodeURIComponent(chunk);
   for (let attempt = 0; attempt <= GOOGLE_BACKOFF.length; attempt++) {
     if (attempt > 0) await sleep(GOOGLE_BACKOFF[attempt - 1]);
     let res;
@@ -192,7 +193,7 @@ async function customTranslate(s, text) {
       body: JSON.stringify({
         model: s.customModel.trim(),
         messages: [
-          { role: 'system', content: '你是日译中字幕翻译。只输出简体中文译文,不要解释,不要附原文。' },
+          { role: 'system', content: '你是字幕翻译。把日语或英语字幕翻译成简体中文。只输出译文,不要解释,不要附原文。' },
           { role: 'user', content: text },
         ],
         temperature: 0.2,
