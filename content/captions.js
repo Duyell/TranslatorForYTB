@@ -313,30 +313,35 @@
 
   function startLive() {
     S.liveStarted = true;
-    OverlayUI.setStatus('等待直播字幕…');
+    if (!S.asrActive) OverlayUI.setStatus('等待直播字幕…');
     const vid = S.videoId;
     let waited = 0;
-    // 直播字幕 = 播放器自动轮询 webvtt,bridge 拦截即可;先确保 CC 打开。
-    // CC 按钮不存在 = 该直播没有自动字幕(取决于主播是否开启)。
+    let ccTried = false;
+    // 直播字幕 = 播放器自动轮询 webvtt,bridge 拦截即可;先尝试打开 CC。
+    // 注意:CC 按钮存在 ≠ 有字幕(主播没开字幕时按钮是摆设,点了也没反应),
+    // 所以拿不到字幕就要限期转语音识别,不能傻等。
     const iv = setInterval(() => {
       waited += 300;
       if (!S.enabled || S.videoId !== vid) { clearInterval(iv); return; }
-      if (waited >= 8000) {
-        clearInterval(iv);
-        if (!S.latestLiveCue) {
-          S.liveStatus = 'none';
-          // 直播无自动字幕 → 语音识别兜底
-          startAsrFallback('本直播无自动字幕,启动语音识别…');
+      if (S.latestLiveCue) { clearInterval(iv); return; } // 字幕到手,成功
+      const btn = document.querySelector('.ytp-subtitles-button');
+      if (btn && !ccTried) {
+        ccTried = true;
+        if (btn.getAttribute('aria-pressed') !== 'true') {
+          btn.click();
+          S.ccToggledByUs = true;
         }
+      }
+      // 10 秒内拿不到直播字幕 → 该直播实际没有字幕,语音识别兜底
+      if (waited >= 10000 && !S.asrActive) {
+        clearInterval(iv);
+        S.liveStatus = 'none';
+        startAsrFallback('直播字幕不可用,启动语音识别…');
         return;
       }
-      const btn = document.querySelector('.ytp-subtitles-button');
-      if (!btn) return;
-      if (btn.getAttribute('aria-pressed') !== 'true') {
-        btn.click();
-        S.ccToggledByUs = true;
-      }
-      clearInterval(iv); // CC 已就绪,等拦截即可
+      // ASR 已兜底时仍继续尝试开 CC(比如主播中途打开了字幕):
+      // 字幕一旦被拦截,applyLiveCues 会自动停掉 ASR 切回字幕
+      if (waited >= 60000) clearInterval(iv); // 安全上限
     }, 300);
   }
 
