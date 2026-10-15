@@ -36,10 +36,12 @@
     if (typeof s.translateChat === 'boolean') chatOn = s.translateChat;
   });
 
-  // 主标签页开关:toggle 消息广播到所有 frame,本地跟随翻转。
-  // 不回应 getState —— 由主框架的 captions.js 回答,iframe 抢答会错乱。
+  // 主标签页开关:background 广播「绝对状态」(setEnabled),直接采用,不翻转。
+  // 不回应 getState/toggle —— 由主框架的 captions.js 回答,iframe 抢答会错乱。
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (msg && msg.type === 'toggle') enabled = !enabled;
+    if (msg && msg.type === 'setEnabled' && typeof msg.enabled === 'boolean') {
+      enabled = msg.enabled;
+    }
   });
 
   function injectStyle() {
@@ -106,6 +108,10 @@
   function init() {
     if (!isChatFrame()) return; // 非聊天 iframe 直接退出
     loadSettings().then(() => {
+      // 查询本标签页的真实开关状态(iframe 可能晚于开关切换才加载,不能只看默认设置)
+      chrome.runtime.sendMessage({ type: 'getTabEnabled' })
+        .then((r) => { if (r && typeof r.enabled === 'boolean') enabled = r.enabled; })
+        .catch(() => { /* 保持设置默认值 */ });
       injectStyle();
       // 观察新增消息(含置顶、超级留言、回放聊天)
       const observer = new MutationObserver((mutations) => {

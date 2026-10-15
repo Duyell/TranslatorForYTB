@@ -49,6 +49,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch((err) => sendResponse({ ok: false, error: err.message || String(err) }));
     return true;
   }
+  if (msg.type === 'getTabEnabled' && sender.tab) {
+    // 内容脚本(如聊天 iframe)查询本标签页的真实开关状态:
+    // 转发给主框架的 captions.js 回答,再原样返回
+    chrome.tabs.sendMessage(sender.tab.id, { type: 'getState' })
+      .then((resp) => sendResponse(resp || {}))
+      .catch(() => sendResponse({}));
+    return true;
+  }
   if (msg.type === 'asrStart') {
     startAsr(sender.tab && sender.tab.id)
       .then(() => sendResponse({ ok: true }))
@@ -365,6 +373,11 @@ chrome.action.onClicked.addListener(async (tab) => {
     try {
       const resp = await chrome.tabs.sendMessage(tab.id, { type: 'toggle' });
       updateBadge(tab.id, resp && resp.enabled);
+      // 把开关的绝对状态广播给所有 frame(聊天 iframe 需要同步;
+      // 翻转式切换在 iframe 重载后会失步,导致评论翻译与字幕开关状态错位)
+      if (resp && typeof resp.enabled === 'boolean') {
+        chrome.tabs.sendMessage(tab.id, { type: 'setEnabled', enabled: resp.enabled }).catch(() => {});
+      }
     } catch {
       // 内容脚本未就绪(页面刚加载):刷新 badge 即可,用户再点一次即生效
       updateBadge(tab.id);
