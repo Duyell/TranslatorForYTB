@@ -155,8 +155,11 @@ function chunkBySentence(text, maxLen) {
 }
 
 async function googleRequest(chunk) {
-  // sl=auto:主播说话常夹杂英文单词/句子,自动检测源语言(日/英都翻成中文)
-  const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=zh-CN&dt=t&q=' + encodeURIComponent(chunk);
+  // 源语言按文本特征判断:英文字母占多数 → 英译中,否则日译中。
+  // (sl=auto 会把含汉字的日语句子误判成中文而原样返回,不如自己判断)
+  const asciiCount = (chunk.match(/[a-zA-Z]/g) || []).length;
+  const sl = asciiCount > chunk.length * 0.5 ? 'en' : 'ja';
+  const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=' + sl + '&tl=zh-CN&dt=t&q=' + encodeURIComponent(chunk);
   for (let attempt = 0; attempt <= GOOGLE_BACKOFF.length; attempt++) {
     if (attempt > 0) await sleep(GOOGLE_BACKOFF[attempt - 1]);
     let res;
