@@ -78,7 +78,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 const MAX_TEXT_LEN = 6000;      // 单次翻译文本上限(防滥用)
 const GOOGLE_CHUNK_LEN = 4500;  // Google 接口单请求字符上限(~5000)
 const GOOGLE_MIN_INTERVAL = 350; // Google 请求最小间隔(ms),防限流
-const GOOGLE_BACKOFF = [5000, 20000]; // 429/503 退避:5s、20s,仍失败报可重试错
+const GOOGLE_FETCH_TIMEOUT = 8000; // 单次请求超时(ms)
+const GOOGLE_BACKOFF = [1500]; // 429/503 退避(ms):只重试一次,保证单条最坏 ~17 秒内返回
+// 注意:内容脚本侧有 20 秒无响应判失败,SW 单条耗时必须小于它,否则重试会雪崩
 const FETCH_TIMEOUT = 12000;    // 单次请求超时(ms):防止连接挂起把翻译队列永久卡死
 
 let lastGoogleCall = 0;
@@ -158,7 +160,7 @@ async function googleRequest(chunk) {
     if (attempt > 0) await sleep(GOOGLE_BACKOFF[attempt - 1]);
     let res;
     try {
-      res = await fetchWithTimeout(url, null, FETCH_TIMEOUT);
+      res = await fetchWithTimeout(url, null, GOOGLE_FETCH_TIMEOUT);
     } catch (e) {
       if (attempt < GOOGLE_BACKOFF.length) continue; // 网络错误/超时,退避重试
       throw new Error('网络不通或请求超时,无法访问 Google 翻译(请检查代理)');

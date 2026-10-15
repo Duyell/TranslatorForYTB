@@ -29,6 +29,7 @@
     seenLive: new Set(),    // 直播去重:"start|text"
     translations: new Map(),// 原文 → 译文(按视频缓存)
     failed: new Set(),      // 翻译失败的原文(降级显示原文)
+    retryPending: new Set(),// 延迟重试中的原文(防重复入队)
     queue: [],              // 待翻译队列:{text, start, attempts}
     inflight: 0,            // 翻译中数量
     ccToggledByUs: false,   // 是否由本扩展打开的原生 CC(关闭时恢复)
@@ -201,6 +202,7 @@
     S.seenLive.clear();
     S.translations.clear();
     S.failed.clear();
+    S.retryPending.clear();
     S.queue = [];
     S.inflight = 0;
     S.ccToggledByUs = false; // 换视频后原生 CC 状态由播放器接管,不再恢复
@@ -534,6 +536,7 @@
   // 按「离当前播放位置的距离」优先,保证正在看的内容先出译文,其余后台补翻
   function enqueue(text, start) {
     if (S.translations.has(text) || S.failed.has(text)) return;
+    if (S.retryPending.has(text)) return; // 已在延迟重试中
     if (S.queue.some((it) => it.text === text)) return; // 同文本已在队列/翻译中
     S.queue.push({ text, start, attempts: 0 });
     processQueue();
@@ -543,6 +546,9 @@
     if (!S.enabled) return;
     const now = currentTimeMs();
     S.queue.sort((a, b) => Math.abs(a.start - now) - Math.abs(b.start - now));
+    // 直播/语音识别模式下队列限长:网络卡顿时旧字幕直接丢弃,保新字幕出译文
+    const cap = (S.isLive || S.source === 'asr') ? 8 : 200;
+    if (S.queue.length > cap) S.queue.length = cap; // 排序后队尾是最远的
     while (S.inflight < CONCURRENCY && S.queue.length) {
       const item = S.queue.shift();
       if (S.translations.has(item.text) || S.failed.has(item.text)) continue;
@@ -571,8 +577,15 @@
       S.translations.set(item.text, result.text);
       console.log('[YTSUB] 翻译完成:', JSON.stringify(item.text.slice(0, 40)), '→', JSON.stringify(result.text.slice(0, 40)));
     } else if (item.attempts < 2) {
-      console.log('[YTSUB] 翻译失败(第 ' + (item.attempts + 1) + ' 次,重试中):', (result && result.error) || '无响应');
-      S.queue.push({ text: item.text, start: item.start, attempts: item.attempts + 1 }); // 重试 2 次
+      // 网络抖动:缓 3 秒再重试,避免队列空转、请求雪崩
+      console.log('[YTSUB] 翻译失败(第 ' + (item.attempts + 1) + ' 次,3 秒后重试):', (result && result.error) || '无响应');
+      S.retryPending.add(item.text);
+      setTimeout(() => {
+        S.retryPending.delete(item.text);
+        if (S.translations.has(item.text) || S.failed.has(item.text)) return;
+        S.queue.push({ text: item.text, start: item.start, attempts: item.attempts + 1 });
+        processQueue();
+      }, 3000);
     } else {
       console.log('[YTSUB] 翻译最终失败,降级显示原文:', (result && result.error) || '无响应');
       S.failed.add(item.text); // 最终失败:降级只显示日语原文
@@ -629,6 +642,10 @@
     }
     const zh = S.translations.get(found.text) ?? null;
     const failed = S.failed.has(found.text);
+    // 显示到哪句就补翻哪句(队列限长丢弃的旧字幕靠这里兜底,不会卡在「翻译中…」)
+    if (!zh && !failed && !S.retryPending.has(found.text) && !S.queue.some((it) => it.text === found.text)) {
+      enqueue(found.text, found.start);
+    }
     // key 含译文状态:翻译完成时即使 cue 不变也会刷新显示
     const key = found.start + '|' + found.text + '|' + (zh ? '1' : failed ? '2' : '0');
     if (key === S.shownKey) return;
