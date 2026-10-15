@@ -61,15 +61,28 @@
     (document.head || document.documentElement).appendChild(style);
   }
 
-  // 翻译一条消息并附加译文行
-  function handleMessage(renderer) {
+  // 需要处理的聊天渲染器:普通评论 / 超级留言(SC)/ 置顶消息 / SC 跑马灯条目
+  const RENDERERS = 'yt-live-chat-text-message-renderer, yt-live-chat-paid-message-renderer, yt-live-chat-pinned-message-renderer, yt-live-chat-ticker-paid-message-item-renderer';
+
+  // 处理一条消息:文本还没就位(如 SC 先插空壳后异步填文本)时不标记,
+  // 等后续 mutation/兜底轮询再试;有文本才标记已处理
+  function processRenderer(r) {
     if (!enabled || !chatOn) return;
-    const message = renderer.querySelector('#message');
-    if (!message) return;
-    const text = (message.textContent || '').trim();
-    if (text.length < 2) return;
+    if (r.__ytfDone) return;
+    const message = r.querySelector('#message');
+    const text = message ? (message.textContent || '').trim() : '';
+    if (text.length < 2) return; // 文本未就位,下次再试
+    r.__ytfDone = true;
+    handleMessage(r, message, text);
+  }
+
+  // 翻译一条消息并附加译文行
+  function handleMessage(renderer, message, text) {
     if (cache.has(text)) { appendZh(message, cache.get(text)); return; }
-    if (pending >= MAX_PENDING) return; // 评论刷太快:放弃这条,保住新评论
+    if (pending >= MAX_PENDING) {
+      renderer.__ytfDone = false; // 队列满载暂缓:取消标记,兜底轮询稍后再试
+      return;
+    }
     pending++;
     chrome.runtime.sendMessage({ type: 'translate', text, priority: 'low' })
       .then((resp) => {
@@ -98,11 +111,7 @@
 
   function scan(root) {
     if (!root.querySelectorAll) return;
-    for (const r of root.querySelectorAll('yt-live-chat-text-message-renderer, yt-live-chat-paid-message-renderer')) {
-      if (r.__ytfDone) continue;
-      r.__ytfDone = true;
-      handleMessage(r);
-    }
+    for (const r of root.querySelectorAll(RENDERERS)) processRenderer(r);
   }
 
   function init() {
@@ -113,24 +122,32 @@
         .then((r) => { if (r && typeof r.enabled === 'boolean') enabled = r.enabled; })
         .catch(() => { /* 保持设置默认值 */ });
       injectStyle();
-      // 观察新增消息(含置顶、超级留言、回放聊天)
+      // 观察消息变化:新增节点 + 文本变更(SC/置顶消息的文本是异步填充的)
       const observer = new MutationObserver((mutations) => {
         for (const m of mutations) {
+          if (m.type === 'characterData') {
+            // 文本后到:从文本节点往上找所属渲染器再处理
+            let el = m.target.parentElement;
+            while (el && el !== document.body) {
+              if (el.matches && el.matches(RENDERERS)) { processRenderer(el); break; }
+              el = el.parentElement;
+            }
+            continue;
+          }
           for (const node of m.addedNodes) {
             if (node.nodeType !== 1) continue;
-            if (node.matches &&
-                node.matches('yt-live-chat-text-message-renderer, yt-live-chat-paid-message-renderer')) {
-              if (node.__ytfDone) continue;
-              node.__ytfDone = true;
-              handleMessage(node);
+            if (node.matches && node.matches(RENDERERS)) {
+              processRenderer(node);
             } else {
               scan(node);
             }
           }
         }
       });
-      observer.observe(document.body, { childList: true, subtree: true });
-      scan(document.body); // 打开页面时已存在的消息
+      observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+      scan(document.body); // 打开页面时已存在的消息(含置顶)
+      // 兜底轮询:任何漏网之鱼(文本异步填充等)每 3 秒补扫一次
+      setInterval(() => scan(document.body), 3000);
     });
   }
 
