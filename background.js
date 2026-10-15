@@ -364,14 +364,24 @@ async function authorizeAsr(tabId) {
     const s = await getSettings();
     if (!s.asrApiKey) throw new Error('未配置语音识别 API Key(设置页 → 语音识别)');
     await applyAsrDnrRules();
-    const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+    let streamId;
+    try {
+      streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+    } catch (err) {
+      // 授权状态可能晚于点击处理器生效:稍等重试一次
+      console.log('[YTSUB-ASR] 授权第一次申请失败,600ms 后重试:', err.message || String(err));
+      await sleep(600);
+      streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+    }
     await createOffscreen();
     const resp = await chrome.runtime.sendMessage({ type: 'asrInit', streamId, language: s.asrLanguage || 'ja-JP' });
     if (!resp || !resp.ok) throw new Error((resp && resp.error) || '音频采集启动失败');
     asrTabId = tabId;
     await chrome.tabs.sendMessage(tabId, { type: 'asrReady' });
     updateBadge(tabId, true);
+    console.log('[YTSUB-ASR] 授权成功,采集已启动');
   } catch (err) {
+    console.log('[YTSUB-ASR] 授权启动失败:', err.message || String(err));
     try {
       await chrome.tabs.sendMessage(tabId, { type: 'asrAuthFailed', error: err.message || String(err) });
     } catch { /* 标签已关闭 */ }

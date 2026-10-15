@@ -41,6 +41,7 @@
     asrCue: null,           // ASR 最新识别结果:{text, time}
     asrError: '',           // ASR 错误文案(如未配置 Key)
     asrAuthNeeded: false,   // tabCapture 需要用户点一次图标授权(activeTab)
+    asrAuthAttempts: 0,     // 授权失败自动重试计数
     source: 'captions',     // 当前字幕来源:'captions' | 'asr'
     tracksReceived: false,  // 本视频是否拿到过 captionTracks
     trackTimer: null,       // 等待/重试 captionTracks 的定时器
@@ -216,6 +217,7 @@
     S.asrCue = null;    // 换视频后旧的识别结果不显示
     S.asrError = '';
     S.asrAuthNeeded = false; // 换视频后重新尝试自动启动(授权在同标签内仍有效)
+    S.asrAuthAttempts = 0;
     clearTimeout(S.trackTimer);
     OverlayUI.hide();
   }
@@ -393,7 +395,13 @@
       // tabCapture 需要用户手势:提示点一次工具栏图标完成授权(授权后自动启动)
       if (/invoked|activeTab/i.test(S.asrError)) {
         S.asrAuthNeeded = true;
-        OverlayUI.setStatus('语音识别需授权:点击工具栏图标(或按 Alt+Shift+D)一次');
+        if (!S.asrAuthAttempts) {
+          // 第一次失败:还没点过图标,提示用户授权
+          OverlayUI.setStatus('语音识别需授权:点击工具栏图标(或按 Alt+Shift+D)一次');
+          return;
+        }
+        // 点过图标仍报授权错(Chrome 授权状态晚于点击生效):静默自动重试
+        scheduleAsrAuthRetry();
         return;
       }
       OverlayUI.setStatus(S.asrError);
@@ -402,17 +410,39 @@
     S.asrActive = true;
   }
 
+  // 授权失败自动重试:Chrome 的 activeTab 授权状态可能晚于点击生效,
+  // 稍等片刻重试即成功;多次失败才提示用户再点一次
+  function scheduleAsrAuthRetry() {
+    S.asrAuthAttempts++;
+    if (S.asrAuthAttempts > 5) {
+      OverlayUI.setStatus('语音识别授权失败,请再点击一次工具栏图标');
+      return;
+    }
+    OverlayUI.setStatus('授权处理中,请稍候…');
+    setTimeout(() => {
+      if (S.enabled && !S.asrActive && S.asrAuthNeeded) startAsrFallback('启动语音识别…');
+    }, 2500);
+  }
+
   // 用户点了图标完成授权,SW 已启动采集 → 激活 ASR 显示
   function onAsrReady() {
     S.asrAuthNeeded = false;
+    S.asrAuthAttempts = 0;
     S.asrActive = true;
     S.source = 'asr';
     OverlayUI.setStatus('语音识别已启动,等待说话…');
   }
 
   function onAsrAuthFailed(error) {
-    S.asrAuthNeeded = false;
     S.asrError = '语音识别启动失败: ' + (error || '未知错误');
+    if (/invoked|activeTab/i.test(S.asrError)) {
+      // 点击授权的尝试也撞上授权状态晚到:保持等待并自动重试
+      S.asrAuthNeeded = true;
+      S.asrAuthAttempts = Math.max(1, S.asrAuthAttempts);
+      scheduleAsrAuthRetry();
+      return;
+    }
+    S.asrAuthNeeded = false;
     OverlayUI.setStatus(S.asrError);
   }
 
